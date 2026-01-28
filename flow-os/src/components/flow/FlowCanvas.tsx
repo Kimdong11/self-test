@@ -129,25 +129,44 @@ export function FlowCanvas({ className }: FlowCanvasProps) {
           </div>
         </Panel>
 
-        {/* Empty State */}
+        {/* Empty State - Welcome Message */}
         {nodes.length === 0 && (
-          <Panel position="top-center" className="mt-32">
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="text-center"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.5, ease: 'easeOut' }}
+              className="text-center px-8"
             >
-              <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-flow-accent/10 border border-flow-accent/30 flex items-center justify-center">
-                <Plus className="w-8 h-8 text-flow-accent" />
-              </div>
-              <h3 className="text-lg font-semibold text-flow-text mb-2">
-                Start Building Your Workflow
-              </h3>
-              <p className="text-sm text-flow-text-muted max-w-xs">
-                Click &quot;Add Node&quot; or use the AI chat to describe your workflow
-              </p>
+              <motion.h1 
+                className="text-4xl md:text-5xl font-bold text-flow-text-muted/30 mb-4 select-none"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2 }}
+              >
+                Welcome to Flow-OS
+              </motion.h1>
+              <motion.p 
+                className="text-lg md:text-xl text-flow-text-muted/50 max-w-md mx-auto select-none"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4 }}
+              >
+                Type in the chat to generate your first workflow.
+              </motion.p>
+              <motion.div
+                className="mt-8 flex items-center justify-center gap-2 text-flow-text-muted/40"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.6 }}
+              >
+                <span className="text-sm">Try:</span>
+                <code className="px-3 py-1.5 rounded-lg bg-flow-surface/50 text-flow-accent/60 text-sm font-mono">
+                  Login → Validate → Dashboard
+                </code>
+              </motion.div>
             </motion.div>
-          </Panel>
+          </div>
         )}
       </ReactFlow>
     </div>

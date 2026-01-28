@@ -12,10 +12,12 @@ interface ChatInputProps {
   className?: string;
 }
 
+const DEFAULT_PLACEHOLDER = "Describe your workflow... (e.g., 'Login Process for Shopping App')";
+
 export function ChatInput({
   onSend,
   isLoading = false,
-  placeholder = "Describe your workflow...",
+  placeholder = DEFAULT_PLACEHOLDER,
   className,
 }: ChatInputProps) {
   const [input, setInput] = useState('');

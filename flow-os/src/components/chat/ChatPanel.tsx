@@ -287,7 +287,6 @@ What workflow would you like to create?`,
       <ChatInput 
         onSend={handleSend} 
         isLoading={isLoading}
-        placeholder="Describe your workflow... (e.g., A -> B -> C)"
       />
     </div>
   );
