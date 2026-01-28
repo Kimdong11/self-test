@@ -8,3 +8,11 @@ export {
   createEmptyGraph,
   mergeGraphs,
 } from './text-to-graph';
+
+export {
+  getLayoutedElements,
+  needsLayout,
+  getNodesBounds,
+  getNewNodePosition,
+  type LayoutOptions,
+} from './layout';

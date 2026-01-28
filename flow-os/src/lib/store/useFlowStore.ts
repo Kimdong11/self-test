@@ -10,7 +10,7 @@ import {
   applyEdgeChanges,
   addEdge,
 } from '@xyflow/react';
-import { textToGraph } from '../graph';
+import { textToGraph, getLayoutedElements, getNewNodePosition } from '../graph';
 import type { GraphStructure, GraphLayoutOptions, TextToGraphResult } from '../types';
 
 // ============================================================================
@@ -34,6 +34,7 @@ interface FlowState {
   selectedNode: FlowNode | null;
   isProcessing: boolean;
   lastConversionResult: TextToGraphResult | null;
+  shouldFitView: boolean; // Flag to trigger fitView in canvas
   
   // Node/Edge Actions
   setNodes: (nodes: FlowNode[]) => void;
@@ -52,6 +53,10 @@ interface FlowState {
   loadFromGraph: (graph: GraphStructure) => void;
   appendFromText: (text: string, options?: GraphLayoutOptions) => TextToGraphResult;
   setProcessing: (processing: boolean) => void;
+  
+  // Layout Actions
+  applyLayout: () => void;
+  setShouldFitView: (should: boolean) => void;
 }
 
 // ============================================================================
@@ -85,20 +90,6 @@ function graphToFlowFormat(graph: GraphStructure): { nodes: FlowNode[]; edges: F
   return { nodes, edges };
 }
 
-/**
- * Calculate offset position for appending new nodes
- */
-function calculateAppendOffset(existingNodes: FlowNode[]): { x: number; y: number } {
-  if (existingNodes.length === 0) {
-    return { x: 250, y: 50 };
-  }
-
-  const maxY = Math.max(...existingNodes.map(n => n.position.y));
-  const avgX = existingNodes.reduce((sum, n) => sum + n.position.x, 0) / existingNodes.length;
-
-  return { x: avgX, y: maxY + 200 };
-}
-
 // ============================================================================
 // Initial State
 // ============================================================================
@@ -119,6 +110,7 @@ export const useFlowStore = create<FlowState>()(
       selectedNode: null,
       isProcessing: false,
       lastConversionResult: null,
+      shouldFitView: false,
 
       // Node/Edge Actions
       setNodes: (nodes) => set({ nodes }),
@@ -151,8 +143,12 @@ export const useFlowStore = create<FlowState>()(
       },
       
       addNode: (node) => {
+        const existingNodes = get().nodes;
+        const position = getNewNodePosition(existingNodes);
+        
         set({
-          nodes: [...get().nodes, node],
+          nodes: [...existingNodes, { ...node, position }],
+          shouldFitView: true,
         });
       },
       
@@ -183,6 +179,7 @@ export const useFlowStore = create<FlowState>()(
         edges: [], 
         selectedNode: null,
         lastConversionResult: null,
+        shouldFitView: false,
       }),
 
       // Text-to-Graph Actions
@@ -193,7 +190,24 @@ export const useFlowStore = create<FlowState>()(
         
         if (result.success && result.graph) {
           const { nodes, edges } = graphToFlowFormat(result.graph);
-          set({ nodes, edges, selectedNode: null });
+          
+          // Apply dagre layout for optimal positioning
+          const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
+            nodes,
+            edges,
+            {
+              direction: 'TB',
+              nodeSep: 80,   // Horizontal gap
+              rankSep: 120,  // Vertical gap
+            }
+          );
+          
+          set({ 
+            nodes: layoutedNodes, 
+            edges: layoutedEdges, 
+            selectedNode: null,
+            shouldFitView: true, // Trigger fitView after loading
+          });
         }
         
         return result;
@@ -201,40 +215,69 @@ export const useFlowStore = create<FlowState>()(
 
       loadFromGraph: (graph) => {
         const { nodes, edges } = graphToFlowFormat(graph);
-        set({ nodes, edges, selectedNode: null });
+        
+        // Apply dagre layout
+        const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
+          nodes,
+          edges,
+          {
+            direction: 'TB',
+            nodeSep: 80,
+            rankSep: 120,
+          }
+        );
+        
+        set({ 
+          nodes: layoutedNodes, 
+          edges: layoutedEdges, 
+          selectedNode: null,
+          shouldFitView: true,
+        });
       },
 
       appendFromText: (text, options) => {
         const existingNodes = get().nodes;
-        const offset = calculateAppendOffset(existingNodes);
+        const existingEdges = get().edges;
         
-        const result = textToGraph(text, {
-          ...options,
-          startPosition: offset,
-        });
+        const result = textToGraph(text, options);
         
         set({ lastConversionResult: result });
         
         if (result.success && result.graph) {
           const { nodes: newNodes, edges: newEdges } = graphToFlowFormat(result.graph);
           
+          // Combine all nodes and edges
+          let allNodes = [...existingNodes, ...newNodes];
+          let allEdges = [...existingEdges, ...newEdges];
+          
           // Connect last existing node to first new node if both exist
-          let connectingEdge: FlowEdge[] = [];
           if (existingNodes.length > 0 && newNodes.length > 0) {
             const lastExisting = existingNodes[existingNodes.length - 1];
             const firstNew = newNodes[0];
-            connectingEdge = [{
+            allEdges.push({
               id: `edge-connect-${Date.now()}`,
               source: lastExisting.id,
               target: firstNew.id,
               animated: true,
               style: { stroke: '#00F0FF', strokeWidth: 2 },
-            }];
+            });
           }
           
+          // Apply dagre layout to entire graph
+          const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
+            allNodes,
+            allEdges,
+            {
+              direction: 'TB',
+              nodeSep: 80,
+              rankSep: 120,
+            }
+          );
+          
           set({
-            nodes: [...existingNodes, ...newNodes],
-            edges: [...get().edges, ...connectingEdge, ...newEdges],
+            nodes: layoutedNodes,
+            edges: layoutedEdges,
+            shouldFitView: true,
           });
         }
         
@@ -242,6 +285,31 @@ export const useFlowStore = create<FlowState>()(
       },
 
       setProcessing: (processing) => set({ isProcessing: processing }),
+
+      // Layout Actions
+      applyLayout: () => {
+        const { nodes, edges } = get();
+        
+        if (nodes.length === 0) return;
+        
+        const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
+          nodes,
+          edges,
+          {
+            direction: 'TB',
+            nodeSep: 80,
+            rankSep: 120,
+          }
+        );
+        
+        set({ 
+          nodes: layoutedNodes, 
+          edges: layoutedEdges,
+          shouldFitView: true,
+        });
+      },
+
+      setShouldFitView: (should) => set({ shouldFitView: should }),
     }),
     { name: 'flow-store' }
   )

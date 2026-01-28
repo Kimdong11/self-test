@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import {
   ReactFlow,
   Background,
@@ -8,10 +8,12 @@ import {
   MiniMap,
   BackgroundVariant,
   Panel,
+  useReactFlow,
+  ReactFlowProvider,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { motion } from 'framer-motion';
-import { Plus, Trash2, Download, Upload } from 'lucide-react';
+import { Plus, Trash2, LayoutGrid } from 'lucide-react';
 import { useFlowStore } from '@/lib/store';
 import { nodeTypes } from './index';
 import { cn } from '@/lib/utils';
@@ -20,7 +22,8 @@ interface FlowCanvasProps {
   className?: string;
 }
 
-export function FlowCanvas({ className }: FlowCanvasProps) {
+// Inner component that uses useReactFlow (must be inside ReactFlowProvider)
+function FlowCanvasInner({ className }: FlowCanvasProps) {
   const {
     nodes,
     edges,
@@ -29,20 +32,42 @@ export function FlowCanvas({ className }: FlowCanvasProps) {
     onConnect,
     addNode,
     clearFlow,
+    applyLayout,
+    shouldFitView,
+    setShouldFitView,
   } = useFlowStore();
+
+  const { fitView } = useReactFlow();
+
+  // Smooth fitView animation when shouldFitView flag is set
+  useEffect(() => {
+    if (shouldFitView && nodes.length > 0) {
+      // Small delay to ensure nodes are rendered
+      const timeoutId = setTimeout(() => {
+        fitView({
+          duration: 800,
+          padding: 0.2,
+        });
+        setShouldFitView(false);
+      }, 100);
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [shouldFitView, nodes.length, fitView, setShouldFitView]);
 
   const handleAddNode = useCallback(() => {
     const newNode = {
       id: `node-${Date.now()}`,
       type: 'workflow',
-      position: {
-        x: Math.random() * 400 + 100,
-        y: Math.random() * 400 + 100,
-      },
+      position: { x: 0, y: 0 }, // Position will be calculated by addNode
       data: { label: `Step ${nodes.length + 1}` },
     };
     addNode(newNode);
   }, [addNode, nodes.length]);
+
+  const handleAutoLayout = useCallback(() => {
+    applyLayout();
+  }, [applyLayout]);
 
   return (
     <div className={cn('w-full h-full relative', className)}>
@@ -54,12 +79,18 @@ export function FlowCanvas({ className }: FlowCanvasProps) {
         onConnect={onConnect}
         nodeTypes={nodeTypes}
         fitView
+        fitViewOptions={{
+          padding: 0.2,
+          duration: 800,
+        }}
         proOptions={{ hideAttribution: true }}
         defaultEdgeOptions={{
           style: { stroke: '#00F0FF', strokeWidth: 2 },
           animated: true,
         }}
         style={{ backgroundColor: '#1A1A2E' }}
+        minZoom={0.1}
+        maxZoom={2}
       >
         {/* Dotted Grid Background */}
         <Background
@@ -100,6 +131,24 @@ export function FlowCanvas({ className }: FlowCanvasProps) {
             <Plus className="w-4 h-4" />
             Add Node
           </motion.button>
+          
+          {nodes.length > 1 && (
+            <motion.button
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={handleAutoLayout}
+              className={cn(
+                'flex items-center gap-2 px-4 py-2.5 rounded-lg',
+                'bg-flow-surface border border-flow-border text-flow-text font-medium text-sm',
+                'hover:border-flow-accent hover:text-flow-accent transition-all duration-200'
+              )}
+            >
+              <LayoutGrid className="w-4 h-4" />
+              Auto Layout
+            </motion.button>
+          )}
           
           <motion.button
             whileHover={{ scale: 1.02 }}
@@ -170,6 +219,15 @@ export function FlowCanvas({ className }: FlowCanvasProps) {
         )}
       </ReactFlow>
     </div>
+  );
+}
+
+// Wrapper component that provides ReactFlowProvider
+export function FlowCanvas({ className }: FlowCanvasProps) {
+  return (
+    <ReactFlowProvider>
+      <FlowCanvasInner className={className} />
+    </ReactFlowProvider>
   );
 }
 
