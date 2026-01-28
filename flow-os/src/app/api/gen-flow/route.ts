@@ -123,15 +123,21 @@ export async function POST(request: NextRequest) {
     };
 
     // Generate content
-    const result = await model.generateContent({
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: `Create a workflow for: ${prompt}` }],
-        },
-      ],
-      generationConfig,
-    });
+    let result;
+    try {
+      result = await model.generateContent({
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: `Create a workflow for: ${prompt}` }],
+          },
+        ],
+        generationConfig,
+      });
+    } catch (genError) {
+      console.error('Gemini generation error:', genError);
+      throw genError;
+    }
 
     // Extract response
     const response = result.response;
@@ -194,31 +200,46 @@ export async function POST(request: NextRequest) {
     // Handle specific errors
     if (error instanceof Error) {
       const message = error.message.toLowerCase();
+      const fullMessage = error.message;
       
-      if (message.includes('api key') || message.includes('api_key')) {
+      if (message.includes('api key') || message.includes('api_key') || message.includes('invalid')) {
         return NextResponse.json(
           { 
             error: 'Invalid API key. Please check your Gemini API key.', 
             code: 'API_KEY_INVALID',
-            help: 'Get a new key at https://aistudio.google.com/app/apikey'
+            help: 'Get a new key at https://aistudio.google.com/app/apikey',
+            details: fullMessage
           },
           { status: 401 }
         );
       }
       
-      if (message.includes('quota') || message.includes('rate')) {
+      if (message.includes('quota') || message.includes('rate') || message.includes('resource')) {
         return NextResponse.json(
           { 
             error: 'Rate limit exceeded or quota exhausted.', 
             code: 'RATE_LIMIT',
-            help: 'Wait a moment and try again, or check your quota at Google AI Studio'
+            help: 'Wait a moment and try again, or check your quota at Google AI Studio',
+            details: fullMessage
           },
           { status: 429 }
         );
       }
+
+      if (message.includes('permission') || message.includes('denied') || message.includes('not enabled')) {
+        return NextResponse.json(
+          { 
+            error: 'API not enabled or permission denied.', 
+            code: 'PERMISSION_DENIED',
+            help: 'Enable the Generative Language API at https://console.cloud.google.com/apis/library/generativelanguage.googleapis.com',
+            details: fullMessage
+          },
+          { status: 403 }
+        );
+      }
       
       return NextResponse.json(
-        { error: error.message, code: 'GENERATION_ERROR' },
+        { error: fullMessage, code: 'GENERATION_ERROR' },
         { status: 500 }
       );
     }
