@@ -197,7 +197,8 @@ The workflow is now visible on the canvas. You can:
       };
     } else {
       // Check if it's an API key error
-      const isApiKeyError = result.error?.toLowerCase().includes('api key');
+      const isApiKeyError = result.error?.toLowerCase().includes('api key') || 
+                           result.code === 'API_KEY_MISSING';
       
       if (isApiKeyError) {
         // Fall back to local parsing
@@ -211,7 +212,9 @@ The workflow is now visible on the canvas. You can:
 
 **Generated:** ${localResult.graph.nodes.length} nodes, ${localResult.graph.edges.length} connections
 
-For AI-powered generation, configure your OpenAI API key in the environment variables.`,
+For AI-powered generation, add your Gemini API key:
+1. Get key at https://aistudio.google.com/app/apikey
+2. Add GEMINI_API_KEY to Vercel environment variables`,
             timestamp: new Date(),
             status: 'warning',
           };

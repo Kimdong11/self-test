@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 // ============================================================================
 // Types
@@ -28,39 +28,47 @@ interface GeneratedFlow {
 // System Prompt
 // ============================================================================
 
-const SYSTEM_PROMPT = `You are a workflow generator. You MUST return ONLY a JSON object. No markdown, no explanations, no code blocks.
+const SYSTEM_PROMPT = `You are a professional workflow architect. Create a node-based workflow for React Flow based on the user's request.
 
-The JSON schema is:
+Return ONLY a JSON object with this exact schema:
 {
-  "nodes": [{ "id": "string", "type": "default"|"input"|"output"|"decision", "position": { "x": number, "y": number }, "data": { "label": "string" } }],
-  "edges": [{ "id": "string", "source": "string", "target": "string", "label?": "string" }]
+  "nodes": [
+    { 
+      "id": "string", 
+      "type": "default" (for standard) or "input" (start) or "output" (end) or "decision" (diamond shape), 
+      "position": { "x": number, "y": number }, 
+      "data": { "label": "string" } 
+    }
+  ],
+  "edges": [
+    { "id": "string", "source": "string", "target": "string", "label": "string (optional)" }
+  ]
 }
 
 Rules:
-1. Use "input" type for starting nodes (triggers, inputs, start points)
-2. Use "output" type for ending nodes (results, outputs, end points)
-3. Use "decision" type for conditional/branching nodes (if/else, switches)
-4. Use "default" type for all other processing steps
-5. Generate unique IDs like "node-1", "node-2", etc.
-6. Generate edge IDs like "edge-1", "edge-2", etc.
-7. Set positions to { "x": 0, "y": 0 } - we will auto-layout on the client
-8. Create logical connections between nodes based on the workflow description
-9. Keep labels concise but descriptive
-
-Based on the user's request, generate a logical flowchart representing their workflow.`;
+1. Layout the nodes logically (e.g., Input at top, Output at bottom). Use simple x, y coordinates (increment y by 100 for each step).
+2. Ensure IDs are unique strings.
+3. Do not include markdown code blocks (\`\`\`json), just the raw JSON.
+4. Use "input" type for starting nodes (triggers, inputs, start points).
+5. Use "output" type for ending nodes (results, outputs, end points).
+6. Use "decision" type for conditional/branching nodes (if/else, switches).
+7. Use "default" type for all other processing steps.
+8. Keep labels concise but descriptive.`;
 
 // ============================================================================
 // GET Handler - Health Check
 // ============================================================================
 
 export async function GET() {
-  const apiKey = process.env.OPENAI_API_KEY;
-  const isConfigured = !!apiKey && apiKey.startsWith('sk-');
+  const apiKey = process.env.GEMINI_API_KEY;
+  const isConfigured = !!apiKey && apiKey.length > 10;
   
   return NextResponse.json({
     status: 'ok',
+    provider: 'Google Gemini',
+    model: 'gemini-1.5-flash',
     apiKeyConfigured: isConfigured,
-    apiKeyPrefix: apiKey ? `${apiKey.substring(0, 7)}...` : 'not set',
+    apiKeyPrefix: apiKey ? `${apiKey.substring(0, 10)}...` : 'not set',
     timestamp: new Date().toISOString(),
   });
 }
@@ -83,59 +91,55 @@ export async function POST(request: NextRequest) {
     }
 
     // Check for API key
-    const apiKey = process.env.OPENAI_API_KEY;
+    const apiKey = process.env.GEMINI_API_KEY;
     
     if (!apiKey) {
       return NextResponse.json(
         { 
-          error: 'OpenAI API key not configured. Please add OPENAI_API_KEY to your environment variables.', 
+          error: 'Gemini API key not configured. Please add GEMINI_API_KEY to your environment variables.', 
           code: 'API_KEY_MISSING',
-          help: 'Go to Vercel Dashboard → Project Settings → Environment Variables → Add OPENAI_API_KEY'
+          help: 'Get your API key at https://aistudio.google.com/app/apikey'
         },
         { status: 500 }
       );
     }
 
-    if (!apiKey.startsWith('sk-')) {
-      return NextResponse.json(
-        { 
-          error: 'Invalid OpenAI API key format. Key should start with "sk-"', 
-          code: 'API_KEY_INVALID',
-          help: 'Check your API key at https://platform.openai.com/api-keys'
-        },
-        { status: 500 }
-      );
-    }
-
-    // Initialize OpenAI client
-    const openai = new OpenAI({
-      apiKey,
+    // Initialize Google Generative AI client
+    const genAI = new GoogleGenerativeAI(apiKey);
+    
+    // Select the model
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-1.5-flash',
+      systemInstruction: SYSTEM_PROMPT,
     });
 
-    // Call OpenAI API
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content: SYSTEM_PROMPT,
-        },
+    // Configure generation to force JSON output
+    const generationConfig = {
+      temperature: 0.7,
+      topK: 40,
+      topP: 0.95,
+      maxOutputTokens: 2048,
+      responseMimeType: 'application/json',
+    };
+
+    // Generate content
+    const result = await model.generateContent({
+      contents: [
         {
           role: 'user',
-          content: `Generate a workflow for: ${prompt}`,
+          parts: [{ text: `Create a workflow for: ${prompt}` }],
         },
       ],
-      temperature: 0.7,
-      max_tokens: 2000,
-      response_format: { type: 'json_object' },
+      generationConfig,
     });
 
-    // Extract response content
-    const content = completion.choices[0]?.message?.content;
+    // Extract response
+    const response = result.response;
+    const text = response.text();
 
-    if (!content) {
+    if (!text) {
       return NextResponse.json(
-        { error: 'No response from OpenAI', code: 'EMPTY_RESPONSE' },
+        { error: 'No response from Gemini', code: 'EMPTY_RESPONSE' },
         { status: 500 }
       );
     }
@@ -143,11 +147,24 @@ export async function POST(request: NextRequest) {
     // Parse JSON response
     let flowData: GeneratedFlow;
     try {
-      flowData = JSON.parse(content);
+      // Clean the response in case it has markdown code blocks
+      let cleanedText = text.trim();
+      if (cleanedText.startsWith('```json')) {
+        cleanedText = cleanedText.slice(7);
+      }
+      if (cleanedText.startsWith('```')) {
+        cleanedText = cleanedText.slice(3);
+      }
+      if (cleanedText.endsWith('```')) {
+        cleanedText = cleanedText.slice(0, -3);
+      }
+      cleanedText = cleanedText.trim();
+      
+      flowData = JSON.parse(cleanedText);
     } catch (parseError) {
-      console.error('Failed to parse OpenAI response:', content);
+      console.error('Failed to parse Gemini response:', text);
       return NextResponse.json(
-        { error: 'Invalid JSON response from AI', code: 'PARSE_ERROR' },
+        { error: 'Invalid JSON response from AI', code: 'PARSE_ERROR', raw: text.substring(0, 200) },
         { status: 500 }
       );
     }
@@ -174,29 +191,35 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Error generating flow:', error);
     
-    // Handle specific OpenAI errors
-    if (error instanceof OpenAI.APIError) {
-      let errorMessage = error.message;
-      let help = '';
+    // Handle specific errors
+    if (error instanceof Error) {
+      const message = error.message.toLowerCase();
       
-      if (error.status === 401) {
-        errorMessage = 'Invalid API key. Please check your OpenAI API key.';
-        help = 'Get a new key at https://platform.openai.com/api-keys';
-      } else if (error.status === 429) {
-        errorMessage = 'Rate limit exceeded or quota exhausted.';
-        help = 'Check your usage at https://platform.openai.com/usage';
-      } else if (error.status === 503) {
-        errorMessage = 'OpenAI service is temporarily unavailable.';
-        help = 'Please try again in a few moments.';
+      if (message.includes('api key') || message.includes('api_key')) {
+        return NextResponse.json(
+          { 
+            error: 'Invalid API key. Please check your Gemini API key.', 
+            code: 'API_KEY_INVALID',
+            help: 'Get a new key at https://aistudio.google.com/app/apikey'
+          },
+          { status: 401 }
+        );
+      }
+      
+      if (message.includes('quota') || message.includes('rate')) {
+        return NextResponse.json(
+          { 
+            error: 'Rate limit exceeded or quota exhausted.', 
+            code: 'RATE_LIMIT',
+            help: 'Wait a moment and try again, or check your quota at Google AI Studio'
+          },
+          { status: 429 }
+        );
       }
       
       return NextResponse.json(
-        { 
-          error: errorMessage, 
-          code: `OPENAI_${error.status}`,
-          help,
-        },
-        { status: error.status || 500 }
+        { error: error.message, code: 'GENERATION_ERROR' },
+        { status: 500 }
       );
     }
 
