@@ -25,35 +25,38 @@ interface GeneratedFlow {
 }
 
 // ============================================================================
-// System Prompt
+// Prompt Template
 // ============================================================================
 
-const SYSTEM_PROMPT = `You are a professional workflow architect. Create a node-based workflow for React Flow based on the user's request.
+const PROMPT_TEMPLATE = `You are a professional workflow architect. Create a node-based workflow for React Flow.
 
-Return ONLY a JSON object with this exact schema:
+IMPORTANT: Return ONLY a valid JSON object. No markdown, no code blocks, no explanations.
+
+JSON Schema:
 {
   "nodes": [
-    { 
-      "id": "string", 
-      "type": "default" (for standard) or "input" (start) or "output" (end) or "decision" (diamond shape), 
-      "position": { "x": number, "y": number }, 
-      "data": { "label": "string" } 
-    }
+    { "id": "1", "type": "input", "position": { "x": 250, "y": 0 }, "data": { "label": "Start" } },
+    { "id": "2", "type": "default", "position": { "x": 250, "y": 100 }, "data": { "label": "Process" } },
+    { "id": "3", "type": "output", "position": { "x": 250, "y": 200 }, "data": { "label": "End" } }
   ],
   "edges": [
-    { "id": "string", "source": "string", "target": "string", "label": "string (optional)" }
+    { "id": "e1-2", "source": "1", "target": "2" },
+    { "id": "e2-3", "source": "2", "target": "3" }
   ]
 }
 
+Node types:
+- "input": Starting point
+- "output": End point
+- "decision": Conditional/branching
+- "default": Standard process step
+
 Rules:
-1. Layout the nodes logically (e.g., Input at top, Output at bottom). Use simple x, y coordinates (increment y by 100 for each step).
-2. Ensure IDs are unique strings.
-3. Do not include markdown code blocks (\`\`\`json), just the raw JSON.
-4. Use "input" type for starting nodes (triggers, inputs, start points).
-5. Use "output" type for ending nodes (results, outputs, end points).
-6. Use "decision" type for conditional/branching nodes (if/else, switches).
-7. Use "default" type for all other processing steps.
-8. Keep labels concise but descriptive.`;
+1. Position nodes vertically (increment y by 100)
+2. Use unique string IDs
+3. Return ONLY the JSON object
+
+User request: `;
 
 // ============================================================================
 // GET Handler - Health Check
@@ -66,7 +69,7 @@ export async function GET() {
   return NextResponse.json({
     status: 'ok',
     provider: 'Google Gemini',
-    model: 'gemini-2.0-flash',
+    model: 'gemini-pro',
     apiKeyConfigured: isConfigured,
     apiKeyPrefix: apiKey ? `${apiKey.substring(0, 10)}...` : 'not set',
     timestamp: new Date().toISOString(),
@@ -107,39 +110,13 @@ export async function POST(request: NextRequest) {
     // Initialize Google Generative AI client
     const genAI = new GoogleGenerativeAI(apiKey);
     
-    // Select the model (using gemini-2.0-flash which is latest available)
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.0-flash',
-      systemInstruction: SYSTEM_PROMPT,
-    });
+    // Use gemini-pro model (widely available)
+    const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
 
-    // Configure generation to force JSON output
-    const generationConfig = {
-      temperature: 0.7,
-      topK: 40,
-      topP: 0.95,
-      maxOutputTokens: 2048,
-      responseMimeType: 'application/json',
-    };
-
-    // Generate content
-    let result;
-    try {
-      result = await model.generateContent({
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: `Create a workflow for: ${prompt}` }],
-          },
-        ],
-        generationConfig,
-      });
-    } catch (genError) {
-      console.error('Gemini generation error:', genError);
-      throw genError;
-    }
-
-    // Extract response
+    // Generate content with simple prompt
+    const fullPrompt = PROMPT_TEMPLATE + prompt;
+    
+    const result = await model.generateContent(fullPrompt);
     const response = result.response;
     const text = response.text();
 
@@ -150,15 +127,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Parse JSON response
+    // Parse JSON response - clean up any markdown formatting
     let flowData: GeneratedFlow;
     try {
-      // Clean the response in case it has markdown code blocks
       let cleanedText = text.trim();
+      
+      // Remove markdown code blocks if present
       if (cleanedText.startsWith('```json')) {
         cleanedText = cleanedText.slice(7);
-      }
-      if (cleanedText.startsWith('```')) {
+      } else if (cleanedText.startsWith('```')) {
         cleanedText = cleanedText.slice(3);
       }
       if (cleanedText.endsWith('```')) {
@@ -170,7 +147,11 @@ export async function POST(request: NextRequest) {
     } catch (parseError) {
       console.error('Failed to parse Gemini response:', text);
       return NextResponse.json(
-        { error: 'Invalid JSON response from AI', code: 'PARSE_ERROR', raw: text.substring(0, 200) },
+        { 
+          error: 'Invalid JSON response from AI', 
+          code: 'PARSE_ERROR', 
+          raw: text.substring(0, 500) 
+        },
         { status: 500 }
       );
     }
@@ -184,7 +165,6 @@ export async function POST(request: NextRequest) {
     }
 
     if (!flowData.edges || !Array.isArray(flowData.edges)) {
-      // Edges are optional, default to empty array
       flowData.edges = [];
     }
 
@@ -197,67 +177,49 @@ export async function POST(request: NextRequest) {
   } catch (error: unknown) {
     console.error('Error generating flow:', error);
     
-    // Get error details
-    const errorObj = error as { message?: string; status?: number; statusText?: string };
+    const errorObj = error as { message?: string };
     const fullMessage = errorObj?.message || String(error);
     const message = fullMessage.toLowerCase();
-      
-      if (message.includes('api key') || message.includes('api_key') || message.includes('invalid')) {
-        return NextResponse.json(
-          { 
-            error: 'Invalid API key. Please check your Gemini API key.', 
-            code: 'API_KEY_INVALID',
-            help: 'Get a new key at https://aistudio.google.com/app/apikey',
-            details: fullMessage
-          },
-          { status: 401 }
-        );
-      }
-      
-      if (message.includes('quota') || message.includes('rate') || message.includes('resource') || message.includes('429')) {
-        return NextResponse.json(
-          { 
-            error: 'Rate limit exceeded or quota exhausted.', 
-            code: 'RATE_LIMIT',
-            help: 'Wait a moment and try again, or check your quota at Google AI Studio',
-            details: fullMessage,
-            debug: 'Try enabling the API at: https://console.cloud.google.com/apis/library/generativelanguage.googleapis.com'
-          },
-          { status: 429 }
-        );
-      }
-      
-      // Return full error for debugging any other case
+    
+    if (message.includes('api key') || message.includes('api_key') || message.includes('invalid')) {
       return NextResponse.json(
         { 
-          error: 'Generation failed', 
-          code: 'UNKNOWN_ERROR',
-          details: fullMessage,
-          rawError: JSON.stringify(error, Object.getOwnPropertyNames(error))
+          error: 'Invalid API key. Please check your Gemini API key.', 
+          code: 'API_KEY_INVALID',
+          help: 'Get a new key at https://aistudio.google.com/app/apikey'
         },
-        { status: 500 }
+        { status: 401 }
       );
-
-      if (message.includes('permission') || message.includes('denied') || message.includes('not enabled')) {
-        return NextResponse.json(
-          { 
-            error: 'API not enabled or permission denied.', 
-            code: 'PERMISSION_DENIED',
-            help: 'Enable the Generative Language API at https://console.cloud.google.com/apis/library/generativelanguage.googleapis.com',
-            details: fullMessage
-          },
-          { status: 403 }
-        );
-      }
-      
+    }
+    
+    if (message.includes('quota') || message.includes('rate') || message.includes('resource') || message.includes('429')) {
       return NextResponse.json(
-        { error: fullMessage, code: 'GENERATION_ERROR' },
-        { status: 500 }
+        { 
+          error: 'Rate limit exceeded. Please wait a moment and try again.', 
+          code: 'RATE_LIMIT',
+          help: 'Gemini free tier: 15 requests/minute'
+        },
+        { status: 429 }
       );
     }
 
+    if (message.includes('not found') || message.includes('404')) {
+      return NextResponse.json(
+        { 
+          error: 'Model not available. Trying alternative...', 
+          code: 'MODEL_NOT_FOUND',
+          details: fullMessage
+        },
+        { status: 404 }
+      );
+    }
+    
     return NextResponse.json(
-      { error: 'Failed to generate flow', code: 'UNKNOWN_ERROR' },
+      { 
+        error: 'Failed to generate flow', 
+        code: 'GENERATION_ERROR',
+        details: fullMessage
+      },
       { status: 500 }
     );
   }
