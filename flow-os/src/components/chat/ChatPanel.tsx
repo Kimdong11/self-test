@@ -60,7 +60,7 @@ Or use simple formats:
   }, [messages, scrollToBottom]);
 
   // Call the real OpenAI API
-  const generateFlowWithAI = async (prompt: string): Promise<{ success: boolean; data?: APIFlowResponse; error?: string; help?: string; code?: string }> => {
+  const generateFlowWithAI = async (prompt: string): Promise<{ success: boolean; data?: APIFlowResponse; error?: string; help?: string; code?: string; debug?: string }> => {
     try {
       const response = await fetch('/api/gen-flow', {
         method: 'POST',
@@ -71,6 +71,7 @@ Or use simple formats:
       });
 
       const result = await response.json();
+      console.log('API Response:', result); // Debug log
 
       if (!response.ok) {
         return { 
@@ -78,6 +79,7 @@ Or use simple formats:
           error: result.error || 'Failed to generate flow',
           help: result.help,
           code: result.code,
+          debug: result.debug ? JSON.stringify(result.debug, null, 2) : undefined,
         };
       }
 
@@ -85,7 +87,7 @@ Or use simple formats:
         return { success: true, data: result.data };
       }
 
-      return { success: false, error: result.error || 'Invalid response' };
+      return { success: false, error: result.error || 'Invalid response', debug: JSON.stringify(result, null, 2) };
     } catch (error) {
       console.error('API call failed:', error);
       return { success: false, error: 'Network error. Please check your connection and try again.' };
@@ -224,16 +226,16 @@ For AI-powered generation, add your Gemini API key:
       setError(result.error || 'Failed to generate flow');
       
       const helpText = result.help ? `\n\n💡 **Tip:** ${result.help}` : '';
+      const debugText = result.debug ? `\n\n**Debug Info:**\n\`\`\`\n${result.debug.substring(0, 500)}\n\`\`\`` : '';
       
       return {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: `❌ ${result.error || 'Failed to generate flow'}${helpText}
+        content: `❌ ${result.error || 'Failed to generate flow'}${helpText}${debugText}
 
 **Try these alternatives:**
 • Use arrow format: "Login -> Validate -> Dashboard"
-• Use comma format: "Step 1, Step 2, Step 3"
-• Simplify your description`,
+• Use comma format: "Step 1, Step 2, Step 3"`,
         timestamp: new Date(),
         status: 'error',
       };

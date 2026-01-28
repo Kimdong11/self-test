@@ -59,12 +59,41 @@ Rules:
 User request: `;
 
 // ============================================================================
-// GET Handler - Health Check
+// GET Handler - Health Check & List Models
 // ============================================================================
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const apiKey = process.env.GEMINI_API_KEY;
   const isConfigured = !!apiKey && apiKey.length > 10;
+  
+  const url = new URL(request.url);
+  const testMode = url.searchParams.get('test') === 'true';
+  
+  // If test mode, try to list available models
+  if (testMode && apiKey) {
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+      );
+      const data = await response.json();
+      
+      return NextResponse.json({
+        status: 'ok',
+        provider: 'Google Gemini',
+        apiKeyConfigured: isConfigured,
+        apiKeyPrefix: apiKey ? `${apiKey.substring(0, 10)}...` : 'not set',
+        availableModels: data.models?.map((m: { name: string }) => m.name) || [],
+        rawResponse: data,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err) {
+      return NextResponse.json({
+        status: 'error',
+        error: String(err),
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
   
   return NextResponse.json({
     status: 'ok',
@@ -73,6 +102,7 @@ export async function GET() {
     apiKeyConfigured: isConfigured,
     apiKeyPrefix: apiKey ? `${apiKey.substring(0, 10)}...` : 'not set',
     timestamp: new Date().toISOString(),
+    hint: 'Add ?test=true to list available models',
   });
 }
 
@@ -81,69 +111,107 @@ export async function GET() {
 // ============================================================================
 
 export async function POST(request: NextRequest) {
+  const debugInfo: Record<string, unknown> = {
+    timestamp: new Date().toISOString(),
+    steps: [] as string[],
+  };
+  
   try {
     // Parse request body
+    debugInfo.steps = [...(debugInfo.steps as string[]), 'parsing_body'];
     const body = await request.json();
     const { prompt } = body;
+    debugInfo.prompt = prompt;
 
     if (!prompt || typeof prompt !== 'string') {
       return NextResponse.json(
-        { error: 'Missing or invalid prompt', code: 'INVALID_PROMPT' },
+        { error: 'Missing or invalid prompt', code: 'INVALID_PROMPT', debug: debugInfo },
         { status: 400 }
       );
     }
 
     // Check for API key
+    debugInfo.steps = [...(debugInfo.steps as string[]), 'checking_api_key'];
     const apiKey = process.env.GEMINI_API_KEY;
+    debugInfo.apiKeyExists = !!apiKey;
+    debugInfo.apiKeyLength = apiKey?.length || 0;
+    debugInfo.apiKeyPrefix = apiKey ? apiKey.substring(0, 10) + '...' : 'none';
     
     if (!apiKey) {
       return NextResponse.json(
         { 
-          error: 'Gemini API key not configured. Please add GEMINI_API_KEY to your environment variables.', 
+          error: 'Gemini API key not configured', 
           code: 'API_KEY_MISSING',
-          help: 'Get your API key at https://aistudio.google.com/app/apikey'
+          debug: debugInfo
         },
         { status: 500 }
       );
     }
 
     // Initialize Google Generative AI client
+    debugInfo.steps = [...(debugInfo.steps as string[]), 'initializing_client'];
     const genAI = new GoogleGenerativeAI(apiKey);
     
-    // Use gemini-pro model (widely available)
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-
-    // Generate content with simple prompt
-    const fullPrompt = PROMPT_TEMPLATE + prompt;
+    // Try multiple models
+    const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-pro', 'gemini-1.0-pro'];
+    let lastError: unknown = null;
+    let result = null;
+    let usedModel = '';
     
-    let result;
-    let text;
-    try {
-      result = await model.generateContent(fullPrompt);
-      const response = result.response;
-      text = response.text();
-    } catch (genError: unknown) {
-      const err = genError as { message?: string; status?: number };
-      console.error('Gemini generateContent error:', err);
+    for (const modelName of modelsToTry) {
+      try {
+        debugInfo.steps = [...(debugInfo.steps as string[]), `trying_model_${modelName}`];
+        const model = genAI.getGenerativeModel({ model: modelName });
+        
+        const fullPrompt = PROMPT_TEMPLATE + prompt;
+        debugInfo.promptLength = fullPrompt.length;
+        
+        result = await model.generateContent(fullPrompt);
+        usedModel = modelName;
+        debugInfo.steps = [...(debugInfo.steps as string[]), `success_with_${modelName}`];
+        break; // Success, exit loop
+      } catch (modelError: unknown) {
+        lastError = modelError;
+        const errMsg = modelError instanceof Error ? modelError.message : String(modelError);
+        debugInfo[`error_${modelName}`] = errMsg;
+        
+        // If it's not a 404/model not found error, don't try other models
+        if (!errMsg.includes('404') && !errMsg.includes('not found')) {
+          break;
+        }
+      }
+    }
+    
+    if (!result) {
+      const errMsg = lastError instanceof Error ? lastError.message : String(lastError);
       return NextResponse.json(
         { 
-          error: 'Gemini API call failed', 
-          code: 'GEMINI_ERROR',
-          details: err?.message || String(genError),
-          status: err?.status
+          error: 'All models failed', 
+          code: 'ALL_MODELS_FAILED',
+          lastError: errMsg,
+          debug: debugInfo
         },
         { status: 500 }
       );
     }
+    
+    debugInfo.usedModel = usedModel;
+    debugInfo.steps = [...(debugInfo.steps as string[]), 'extracting_response'];
+    
+    const response = result.response;
+    const text = response.text();
+    debugInfo.responseLength = text?.length || 0;
+    debugInfo.responsePreview = text?.substring(0, 200) || 'empty';
 
     if (!text) {
       return NextResponse.json(
-        { error: 'No response from Gemini', code: 'EMPTY_RESPONSE' },
+        { error: 'No response from Gemini', code: 'EMPTY_RESPONSE', debug: debugInfo },
         { status: 500 }
       );
     }
 
-    // Parse JSON response - clean up any markdown formatting
+    // Parse JSON response
+    debugInfo.steps = [...(debugInfo.steps as string[]), 'parsing_json'];
     let flowData: GeneratedFlow;
     try {
       let cleanedText = text.trim();
@@ -160,13 +228,14 @@ export async function POST(request: NextRequest) {
       cleanedText = cleanedText.trim();
       
       flowData = JSON.parse(cleanedText);
+      debugInfo.steps = [...(debugInfo.steps as string[]), 'json_parsed'];
     } catch (parseError) {
-      console.error('Failed to parse Gemini response:', text);
       return NextResponse.json(
         { 
           error: 'Invalid JSON response from AI', 
           code: 'PARSE_ERROR', 
-          raw: text.substring(0, 500) 
+          raw: text.substring(0, 500),
+          debug: debugInfo
         },
         { status: 500 }
       );
@@ -175,7 +244,7 @@ export async function POST(request: NextRequest) {
     // Validate response structure
     if (!flowData.nodes || !Array.isArray(flowData.nodes)) {
       return NextResponse.json(
-        { error: 'Invalid flow structure: missing nodes', code: 'INVALID_STRUCTURE' },
+        { error: 'Invalid flow structure: missing nodes', code: 'INVALID_STRUCTURE', debug: debugInfo },
         { status: 500 }
       );
     }
@@ -184,57 +253,28 @@ export async function POST(request: NextRequest) {
       flowData.edges = [];
     }
 
+    debugInfo.steps = [...(debugInfo.steps as string[]), 'success'];
+    debugInfo.nodesCount = flowData.nodes.length;
+    debugInfo.edgesCount = flowData.edges.length;
+
     // Return the flow data
     return NextResponse.json({
       success: true,
       data: flowData,
+      debug: debugInfo,
     });
 
   } catch (error: unknown) {
-    console.error('Error generating flow:', error);
-    
-    const errorObj = error as { message?: string };
-    const fullMessage = errorObj?.message || String(error);
-    const message = fullMessage.toLowerCase();
-    
-    if (message.includes('api key') || message.includes('api_key') || message.includes('invalid')) {
-      return NextResponse.json(
-        { 
-          error: 'Invalid API key. Please check your Gemini API key.', 
-          code: 'API_KEY_INVALID',
-          help: 'Get a new key at https://aistudio.google.com/app/apikey'
-        },
-        { status: 401 }
-      );
-    }
-    
-    if (message.includes('quota') || message.includes('rate') || message.includes('resource') || message.includes('429')) {
-      return NextResponse.json(
-        { 
-          error: 'Rate limit exceeded. Please wait a moment and try again.', 
-          code: 'RATE_LIMIT',
-          help: 'Gemini free tier: 15 requests/minute'
-        },
-        { status: 429 }
-      );
-    }
-
-    if (message.includes('not found') || message.includes('404')) {
-      return NextResponse.json(
-        { 
-          error: 'Model not available. Trying alternative...', 
-          code: 'MODEL_NOT_FOUND',
-          details: fullMessage
-        },
-        { status: 404 }
-      );
-    }
+    const errorObj = error as { message?: string; stack?: string };
+    debugInfo.finalError = errorObj?.message || String(error);
+    debugInfo.errorStack = errorObj?.stack;
     
     return NextResponse.json(
       { 
-        error: 'Failed to generate flow', 
-        code: 'GENERATION_ERROR',
-        details: fullMessage
+        error: 'Unexpected error', 
+        code: 'UNEXPECTED_ERROR',
+        details: errorObj?.message || String(error),
+        debug: debugInfo
       },
       { status: 500 }
     );
