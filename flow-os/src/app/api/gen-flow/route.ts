@@ -116,9 +116,25 @@ export async function POST(request: NextRequest) {
     // Generate content with simple prompt
     const fullPrompt = PROMPT_TEMPLATE + prompt;
     
-    const result = await model.generateContent(fullPrompt);
-    const response = result.response;
-    const text = response.text();
+    let result;
+    let text;
+    try {
+      result = await model.generateContent(fullPrompt);
+      const response = result.response;
+      text = response.text();
+    } catch (genError: unknown) {
+      const err = genError as { message?: string; status?: number };
+      console.error('Gemini generateContent error:', err);
+      return NextResponse.json(
+        { 
+          error: 'Gemini API call failed', 
+          code: 'GEMINI_ERROR',
+          details: err?.message || String(genError),
+          status: err?.status
+        },
+        { status: 500 }
+      );
+    }
 
     if (!text) {
       return NextResponse.json(
