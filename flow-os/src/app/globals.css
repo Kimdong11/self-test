@@ -1,0 +1,200 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Flow-OS Custom Theme */
+:root {
+  /* Flow-OS Design Colors */
+  --flow-bg-dark: #1A1A2E;
+  --flow-bg-darker: #12121F;
+  --flow-bg-lighter: #252540;
+  --flow-accent: #00F0FF;
+  --flow-accent-dim: #00B8C5;
+  --flow-accent-glow: rgba(0, 240, 255, 0.3);
+  --flow-text: #E8E8E8;
+  --flow-text-muted: #8B8BA3;
+  --flow-border: #2D2D4A;
+  --flow-surface: #1F1F35;
+  
+  /* Base Theme Variables */
+  --radius: 0.625rem;
+  --background: #1A1A2E;
+  --foreground: #E8E8E8;
+  --card: #1F1F35;
+  --card-foreground: #E8E8E8;
+  --popover: #1F1F35;
+  --popover-foreground: #E8E8E8;
+  --primary: #00F0FF;
+  --primary-foreground: #1A1A2E;
+  --secondary: #252540;
+  --secondary-foreground: #E8E8E8;
+  --muted: #252540;
+  --muted-foreground: #8B8BA3;
+  --accent: #00F0FF;
+  --accent-foreground: #1A1A2E;
+  --destructive: #FF4757;
+  --destructive-foreground: #FFFFFF;
+  --border: #2D2D4A;
+  --input: #252540;
+  --ring: #00F0FF;
+  --chart-1: #00F0FF;
+  --chart-2: #7B61FF;
+  --chart-3: #FF61D8;
+  --chart-4: #61FF7B;
+  --chart-5: #FFD761;
+  --sidebar: #12121F;
+  --sidebar-foreground: #E8E8E8;
+  --sidebar-primary: #00F0FF;
+  --sidebar-primary-foreground: #1A1A2E;
+  --sidebar-accent: #252540;
+  --sidebar-accent-foreground: #E8E8E8;
+  --sidebar-border: #2D2D4A;
+  --sidebar-ring: #00F0FF;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), monospace;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  
+  /* Flow-OS custom colors */
+  --color-flow-bg-dark: var(--flow-bg-dark);
+  --color-flow-bg-darker: var(--flow-bg-darker);
+  --color-flow-bg-lighter: var(--flow-bg-lighter);
+  --color-flow-accent: var(--flow-accent);
+  --color-flow-accent-dim: var(--flow-accent-dim);
+  --color-flow-text: var(--flow-text);
+  --color-flow-text-muted: var(--flow-text-muted);
+  --color-flow-border: var(--flow-border);
+  --color-flow-surface: var(--flow-surface);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
+  }
+}
+
+/* Custom scrollbar for dark theme */
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--flow-border) transparent;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: var(--flow-border);
+    border-radius: 3px;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: var(--flow-accent-dim);
+  }
+
+  /* Glow effects */
+  .glow-accent {
+    box-shadow: 0 0 20px var(--flow-accent-glow);
+  }
+  
+  .glow-accent-sm {
+    box-shadow: 0 0 10px var(--flow-accent-glow);
+  }
+}
+
+/* React Flow custom styles */
+.react-flow__background {
+  background-color: var(--flow-bg-dark) !important;
+}
+
+.react-flow__controls {
+  background: var(--flow-surface) !important;
+  border: 1px solid var(--flow-border) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
+}
+
+.react-flow__controls-button {
+  background: var(--flow-surface) !important;
+  border: none !important;
+  border-bottom: 1px solid var(--flow-border) !important;
+  color: var(--flow-text) !important;
+  fill: var(--flow-text) !important;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--flow-bg-lighter) !important;
+  color: var(--flow-accent) !important;
+  fill: var(--flow-accent) !important;
+}
+
+.react-flow__controls-button:last-child {
+  border-bottom: none !important;
+}
+
+.react-flow__minimap {
+  background: var(--flow-surface) !important;
+  border: 1px solid var(--flow-border) !important;
+  border-radius: 8px !important;
+}
+
+.react-flow__edge-path {
+  stroke: var(--flow-accent) !important;
+  stroke-width: 2 !important;
+}
+
+.react-flow__handle {
+  background: var(--flow-accent) !important;
+  border: 2px solid var(--flow-bg-dark) !important;
+}
