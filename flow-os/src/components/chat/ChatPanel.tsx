@@ -60,7 +60,7 @@ Or use simple formats:
   }, [messages, scrollToBottom]);
 
   // Call the real OpenAI API
-  const generateFlowWithAI = async (prompt: string): Promise<{ success: boolean; data?: APIFlowResponse; error?: string }> => {
+  const generateFlowWithAI = async (prompt: string): Promise<{ success: boolean; data?: APIFlowResponse; error?: string; help?: string; code?: string }> => {
     try {
       const response = await fetch('/api/gen-flow', {
         method: 'POST',
@@ -73,7 +73,12 @@ Or use simple formats:
       const result = await response.json();
 
       if (!response.ok) {
-        return { success: false, error: result.error || 'Failed to generate flow' };
+        return { 
+          success: false, 
+          error: result.error || 'Failed to generate flow',
+          help: result.help,
+          code: result.code,
+        };
       }
 
       if (result.success && result.data) {
@@ -83,7 +88,7 @@ Or use simple formats:
       return { success: false, error: result.error || 'Invalid response' };
     } catch (error) {
       console.error('API call failed:', error);
-      return { success: false, error: 'Network error. Please try again.' };
+      return { success: false, error: 'Network error. Please check your connection and try again.' };
     }
   };
 
@@ -215,10 +220,12 @@ For AI-powered generation, configure your OpenAI API key in the environment vari
 
       setError(result.error || 'Failed to generate flow');
       
+      const helpText = result.help ? `\n\n💡 **Tip:** ${result.help}` : '';
+      
       return {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: `❌ ${result.error || 'Failed to generate flow'}
+        content: `❌ ${result.error || 'Failed to generate flow'}${helpText}
 
 **Try these alternatives:**
 • Use arrow format: "Login -> Validate -> Dashboard"

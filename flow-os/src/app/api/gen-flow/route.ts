@@ -50,7 +50,23 @@ Rules:
 Based on the user's request, generate a logical flowchart representing their workflow.`;
 
 // ============================================================================
-// API Handler
+// GET Handler - Health Check
+// ============================================================================
+
+export async function GET() {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const isConfigured = !!apiKey && apiKey.startsWith('sk-');
+  
+  return NextResponse.json({
+    status: 'ok',
+    apiKeyConfigured: isConfigured,
+    apiKeyPrefix: apiKey ? `${apiKey.substring(0, 7)}...` : 'not set',
+    timestamp: new Date().toISOString(),
+  });
+}
+
+// ============================================================================
+// POST Handler - Generate Flow
 // ============================================================================
 
 export async function POST(request: NextRequest) {
@@ -61,16 +77,32 @@ export async function POST(request: NextRequest) {
 
     if (!prompt || typeof prompt !== 'string') {
       return NextResponse.json(
-        { error: 'Missing or invalid prompt' },
+        { error: 'Missing or invalid prompt', code: 'INVALID_PROMPT' },
         { status: 400 }
       );
     }
 
     // Check for API key
     const apiKey = process.env.OPENAI_API_KEY;
+    
     if (!apiKey) {
       return NextResponse.json(
-        { error: 'OpenAI API key not configured' },
+        { 
+          error: 'OpenAI API key not configured. Please add OPENAI_API_KEY to your environment variables.', 
+          code: 'API_KEY_MISSING',
+          help: 'Go to Vercel Dashboard → Project Settings → Environment Variables → Add OPENAI_API_KEY'
+        },
+        { status: 500 }
+      );
+    }
+
+    if (!apiKey.startsWith('sk-')) {
+      return NextResponse.json(
+        { 
+          error: 'Invalid OpenAI API key format. Key should start with "sk-"', 
+          code: 'API_KEY_INVALID',
+          help: 'Check your API key at https://platform.openai.com/api-keys'
+        },
         { status: 500 }
       );
     }
@@ -103,7 +135,7 @@ export async function POST(request: NextRequest) {
 
     if (!content) {
       return NextResponse.json(
-        { error: 'No response from OpenAI' },
+        { error: 'No response from OpenAI', code: 'EMPTY_RESPONSE' },
         { status: 500 }
       );
     }
@@ -115,7 +147,7 @@ export async function POST(request: NextRequest) {
     } catch (parseError) {
       console.error('Failed to parse OpenAI response:', content);
       return NextResponse.json(
-        { error: 'Invalid JSON response from AI' },
+        { error: 'Invalid JSON response from AI', code: 'PARSE_ERROR' },
         { status: 500 }
       );
     }
@@ -123,7 +155,7 @@ export async function POST(request: NextRequest) {
     // Validate response structure
     if (!flowData.nodes || !Array.isArray(flowData.nodes)) {
       return NextResponse.json(
-        { error: 'Invalid flow structure: missing nodes' },
+        { error: 'Invalid flow structure: missing nodes', code: 'INVALID_STRUCTURE' },
         { status: 500 }
       );
     }
@@ -144,14 +176,32 @@ export async function POST(request: NextRequest) {
     
     // Handle specific OpenAI errors
     if (error instanceof OpenAI.APIError) {
+      let errorMessage = error.message;
+      let help = '';
+      
+      if (error.status === 401) {
+        errorMessage = 'Invalid API key. Please check your OpenAI API key.';
+        help = 'Get a new key at https://platform.openai.com/api-keys';
+      } else if (error.status === 429) {
+        errorMessage = 'Rate limit exceeded or quota exhausted.';
+        help = 'Check your usage at https://platform.openai.com/usage';
+      } else if (error.status === 503) {
+        errorMessage = 'OpenAI service is temporarily unavailable.';
+        help = 'Please try again in a few moments.';
+      }
+      
       return NextResponse.json(
-        { error: `OpenAI API error: ${error.message}` },
+        { 
+          error: errorMessage, 
+          code: `OPENAI_${error.status}`,
+          help,
+        },
         { status: error.status || 500 }
       );
     }
 
     return NextResponse.json(
-      { error: 'Failed to generate flow' },
+      { error: 'Failed to generate flow', code: 'UNKNOWN_ERROR' },
       { status: 500 }
     );
   }
