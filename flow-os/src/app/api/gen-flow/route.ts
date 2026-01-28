@@ -66,7 +66,7 @@ export async function GET() {
   return NextResponse.json({
     status: 'ok',
     provider: 'Google Gemini',
-    model: 'gemini-1.5-flash',
+    model: 'gemini-2.0-flash',
     apiKeyConfigured: isConfigured,
     apiKeyPrefix: apiKey ? `${apiKey.substring(0, 10)}...` : 'not set',
     timestamp: new Date().toISOString(),
@@ -107,9 +107,9 @@ export async function POST(request: NextRequest) {
     // Initialize Google Generative AI client
     const genAI = new GoogleGenerativeAI(apiKey);
     
-    // Select the model
+    // Select the model (using gemini-2.0-flash which is latest available)
     const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
+      model: 'gemini-2.0-flash',
       systemInstruction: SYSTEM_PROMPT,
     });
 
