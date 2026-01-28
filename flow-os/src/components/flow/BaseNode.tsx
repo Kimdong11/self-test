@@ -22,26 +22,27 @@ export const BaseNode = memo(function BaseNode({
       exit={{ scale: 0.8, opacity: 0 }}
       transition={{ duration: 0.2 }}
       className={cn(
-        'px-4 py-3 shadow-lg rounded-xl border-2 bg-background min-w-[150px]',
-        'transition-colors duration-200',
+        'px-4 py-3 rounded-xl border-2 min-w-[150px]',
+        'bg-flow-surface backdrop-blur-sm',
+        'transition-all duration-200',
         selected
-          ? 'border-primary shadow-primary/20'
-          : 'border-border hover:border-primary/50',
+          ? 'border-flow-accent shadow-lg shadow-flow-accent/30 glow-accent-sm'
+          : 'border-flow-border hover:border-flow-accent/50',
         className
       )}
     >
       <Handle
         type="target"
         position={Position.Top}
-        className="!w-3 !h-3 !bg-primary !border-2 !border-background"
+        className="!w-3 !h-3 !bg-flow-accent !border-2 !border-flow-bg-dark !-top-1.5"
       />
       
       <div className="flex flex-col gap-1">
-        <span className="text-sm font-medium text-foreground">
+        <span className="text-sm font-medium text-flow-text">
           {data.label}
         </span>
         {data.type && (
-          <span className="text-xs text-muted-foreground capitalize">
+          <span className="text-xs text-flow-text-muted capitalize">
             {data.type}
           </span>
         )}
@@ -50,7 +51,7 @@ export const BaseNode = memo(function BaseNode({
       <Handle
         type="source"
         position={Position.Bottom}
-        className="!w-3 !h-3 !bg-primary !border-2 !border-background"
+        className="!w-3 !h-3 !bg-flow-accent !border-2 !border-flow-bg-dark !-bottom-1.5"
       />
     </motion.div>
   );

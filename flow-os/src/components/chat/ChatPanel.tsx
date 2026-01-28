@@ -2,8 +2,9 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Bot, User, Loader2 } from 'lucide-react';
+import { Bot, User, Loader2, Workflow, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { ChatInput } from './ChatInput';
 
 export interface Message {
   id: string;
@@ -22,11 +23,10 @@ export function ChatPanel({ className, onSendMessage }: ChatPanelProps) {
     {
       id: '1',
       role: 'assistant',
-      content: 'Hello! I\'m your AI workflow assistant. Describe the workflow you want to create, and I\'ll help you build it.',
+      content: 'Welcome to Flow-OS! I\'m your AI workflow assistant. Describe the workflow you want to create, and I\'ll help you build it on the canvas.',
       timestamp: new Date(),
     },
   ]);
-  const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -38,31 +38,29 @@ export function ChatPanel({ className, onSendMessage }: ChatPanelProps) {
     scrollToBottom();
   }, [messages]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || isLoading) return;
-
+  const handleSend = async (content: string) => {
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: input.trim(),
+      content,
       timestamp: new Date(),
     };
 
     setMessages((prev) => [...prev, userMessage]);
-    setInput('');
     setIsLoading(true);
 
     try {
       if (onSendMessage) {
-        await onSendMessage(userMessage.content);
+        await onSendMessage(content);
       }
       
       // Placeholder response - integrate with OpenAI
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: 'I understand you want to create a workflow. Let me help you design it. What specific steps or tasks should be included?',
+        content: 'I understand you want to create a workflow. Let me help you design it. I\'ll add the necessary nodes to your canvas. What specific steps or tasks should be included?',
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, assistantMessage]);
@@ -76,23 +74,33 @@ export function ChatPanel({ className, onSendMessage }: ChatPanelProps) {
   return (
     <div
       className={cn(
-        'flex flex-col h-full bg-background border-l border-border',
+        'flex flex-col h-full bg-flow-bg-darker',
         className
       )}
     >
       {/* Header */}
-      <div className="p-4 border-b border-border">
-        <h2 className="text-lg font-semibold flex items-center gap-2">
-          <Bot className="w-5 h-5 text-primary" />
-          AI Workflow Assistant
-        </h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Describe your workflow and I&apos;ll help build it
-        </p>
+      <div className="p-4 border-b border-flow-border">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-lg bg-flow-accent/10 border border-flow-accent/30">
+            <Workflow className="w-5 h-5 text-flow-accent" />
+          </div>
+          <div>
+            <h2 className="text-base font-semibold text-flow-text flex items-center gap-2">
+              Flow-OS
+              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-flow-accent/10 text-flow-accent text-xs font-medium">
+                <Zap className="w-3 h-3" />
+                AI
+              </span>
+            </h2>
+            <p className="text-xs text-flow-text-muted">
+              AI-powered workflow generator
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin">
         <AnimatePresence initial={false}>
           {messages.map((message) => (
             <motion.div
@@ -107,23 +115,31 @@ export function ChatPanel({ className, onSendMessage }: ChatPanelProps) {
               )}
             >
               {message.role === 'assistant' && (
-                <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-                  <Bot className="w-4 h-4 text-primary" />
+                <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-flow-accent/10 border border-flow-accent/30 flex items-center justify-center">
+                  <Bot className="w-4 h-4 text-flow-accent" />
                 </div>
               )}
               <div
                 className={cn(
-                  'max-w-[80%] rounded-2xl px-4 py-2',
+                  'max-w-[85%] rounded-2xl px-4 py-2.5',
                   message.role === 'user'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted text-foreground'
+                    ? 'bg-flow-accent text-flow-bg-dark rounded-br-md'
+                    : 'bg-flow-surface border border-flow-border text-flow-text rounded-bl-md'
                 )}
               >
-                <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                  {message.content}
+                </p>
+                <p className={cn(
+                  "text-[10px] mt-1.5",
+                  message.role === 'user' ? 'text-flow-bg-dark/60' : 'text-flow-text-muted'
+                )}>
+                  {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </p>
               </div>
               {message.role === 'user' && (
-                <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary flex items-center justify-center">
-                  <User className="w-4 h-4 text-primary-foreground" />
+                <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-flow-accent flex items-center justify-center">
+                  <User className="w-4 h-4 text-flow-bg-dark" />
                 </div>
               )}
             </motion.div>
@@ -136,11 +152,15 @@ export function ChatPanel({ className, onSendMessage }: ChatPanelProps) {
             animate={{ opacity: 1 }}
             className="flex gap-3"
           >
-            <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-              <Loader2 className="w-4 h-4 text-primary animate-spin" />
+            <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-flow-accent/10 border border-flow-accent/30 flex items-center justify-center">
+              <Loader2 className="w-4 h-4 text-flow-accent animate-spin" />
             </div>
-            <div className="bg-muted rounded-2xl px-4 py-2">
-              <p className="text-sm text-muted-foreground">Thinking...</p>
+            <div className="bg-flow-surface border border-flow-border rounded-2xl rounded-bl-md px-4 py-3">
+              <div className="flex gap-1.5">
+                <span className="w-2 h-2 bg-flow-accent/60 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="w-2 h-2 bg-flow-accent/60 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="w-2 h-2 bg-flow-accent/60 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+              </div>
             </div>
           </motion.div>
         )}
@@ -148,36 +168,8 @@ export function ChatPanel({ className, onSendMessage }: ChatPanelProps) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
-      <form onSubmit={handleSubmit} className="p-4 border-t border-border">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Describe your workflow..."
-            disabled={isLoading}
-            className={cn(
-              'flex-1 px-4 py-2 rounded-xl border border-border bg-background',
-              'focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent',
-              'placeholder:text-muted-foreground text-sm',
-              'disabled:opacity-50 disabled:cursor-not-allowed'
-            )}
-          />
-          <button
-            type="submit"
-            disabled={!input.trim() || isLoading}
-            className={cn(
-              'px-4 py-2 rounded-xl bg-primary text-primary-foreground',
-              'hover:bg-primary/90 transition-colors',
-              'disabled:opacity-50 disabled:cursor-not-allowed',
-              'flex items-center justify-center'
-            )}
-          >
-            <Send className="w-4 h-4" />
-          </button>
-        </div>
-      </form>
+      {/* Input - Fixed at bottom */}
+      <ChatInput onSend={handleSend} isLoading={isLoading} />
     </div>
   );
 }

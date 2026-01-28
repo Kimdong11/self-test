@@ -23,29 +23,35 @@ export const WorkflowNode = memo(function WorkflowNode({
       exit={{ scale: 0.8, opacity: 0 }}
       transition={{ duration: 0.2 }}
       className={cn(
-        'px-4 py-3 shadow-lg rounded-xl border-2 bg-gradient-to-br from-background to-muted min-w-[180px]',
+        'px-4 py-3 rounded-xl border-2 min-w-[180px]',
+        'bg-flow-surface backdrop-blur-sm',
         'transition-all duration-200',
         selected
-          ? 'border-primary shadow-primary/30 shadow-xl'
-          : 'border-border hover:border-primary/50 hover:shadow-xl',
+          ? 'border-flow-accent shadow-lg shadow-flow-accent/30 glow-accent-sm'
+          : 'border-flow-border hover:border-flow-accent/50',
         className
       )}
     >
       <Handle
         type="target"
         position={Position.Top}
-        className="!w-3 !h-3 !bg-primary !border-2 !border-background"
+        className="!w-3 !h-3 !bg-flow-accent !border-2 !border-flow-bg-dark !-top-1.5"
       />
       
       <div className="flex items-center gap-3">
-        <div className="p-2 rounded-lg bg-primary/10 text-primary">
+        <div className={cn(
+          "p-2 rounded-lg",
+          selected 
+            ? "bg-flow-accent/20 text-flow-accent" 
+            : "bg-flow-bg-lighter text-flow-text-muted"
+        )}>
           <Workflow className="w-5 h-5" />
         </div>
         <div className="flex flex-col gap-0.5">
-          <span className="text-sm font-semibold text-foreground">
+          <span className="text-sm font-semibold text-flow-text">
             {data.label}
           </span>
-          <span className="text-xs text-muted-foreground">
+          <span className="text-xs text-flow-text-muted">
             Workflow Step
           </span>
         </div>
@@ -54,7 +60,7 @@ export const WorkflowNode = memo(function WorkflowNode({
       <Handle
         type="source"
         position={Position.Bottom}
-        className="!w-3 !h-3 !bg-primary !border-2 !border-background"
+        className="!w-3 !h-3 !bg-flow-accent !border-2 !border-flow-bg-dark !-bottom-1.5"
       />
     </motion.div>
   );
