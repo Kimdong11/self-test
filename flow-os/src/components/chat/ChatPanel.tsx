@@ -1,36 +1,28 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Bot, User, Loader2, Workflow, Zap, CheckCircle, XCircle } from 'lucide-react';
+import { Bot, User, Loader2, Workflow, Zap, CheckCircle, XCircle, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ChatInput } from './ChatInput';
-import { useFlowStore } from '@/lib/store';
+import { useFlowStore, type APIFlowResponse } from '@/lib/store';
 
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
-  status?: 'success' | 'error';
+  status?: 'success' | 'error' | 'warning';
 }
 
 interface ChatPanelProps {
   className?: string;
 }
 
-// Keywords that indicate workflow creation intent
-const WORKFLOW_KEYWORDS = [
-  'workflow', 'flow', 'process', 'steps', 'pipeline',
-  'automate', 'automation', 'sequence', 'diagram',
-  '->', 'then', '순서', '프로세스', '워크플로우', '흐름'
-];
-
-function isWorkflowRequest(message: string): boolean {
-  const lower = message.toLowerCase();
-  return WORKFLOW_KEYWORDS.some(keyword => lower.includes(keyword)) ||
-    message.includes('->') ||
-    message.includes(',') && message.split(',').length >= 2;
+// Check if message is a simple format that can be parsed locally
+function isSimpleFormat(message: string): boolean {
+  return message.includes('->') ||
+    (message.includes(',') && message.split(',').length >= 2 && message.split(',').every(s => s.trim().length < 50));
 }
 
 export function ChatPanel({ className }: ChatPanelProps) {
@@ -40,13 +32,16 @@ export function ChatPanel({ className }: ChatPanelProps) {
       role: 'assistant',
       content: `Welcome to Flow-OS! 🚀
 
-I can help you create workflows from text descriptions. Try these formats:
+I'm powered by AI and can help you create workflows from natural language descriptions.
 
-• **Arrow format:** "Start -> Process -> End"
-• **Comma format:** "Step 1, Step 2, Step 3"
-• **Natural:** "Get data then process then save"
+**Try describing your workflow:**
+• "User login flow for an e-commerce app"
+• "CI/CD pipeline for a Node.js project"
+• "Customer support ticket handling process"
 
-Or just describe your workflow and I'll visualize it!`,
+Or use simple formats:
+• "Login -> Validate -> Dashboard"
+• "Step 1, Step 2, Step 3"`,
       timestamp: new Date(),
     },
   ]);
@@ -54,15 +49,43 @@ Or just describe your workflow and I'll visualize it!`,
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   // Get store actions
-  const { loadFromText, appendFromText, nodes } = useFlowStore();
+  const { loadFromText, loadFromAPIResponse, nodes, setError } = useFlowStore();
 
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, scrollToBottom]);
+
+  // Call the real OpenAI API
+  const generateFlowWithAI = async (prompt: string): Promise<{ success: boolean; data?: APIFlowResponse; error?: string }> => {
+    try {
+      const response = await fetch('/api/gen-flow', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ prompt }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        return { success: false, error: result.error || 'Failed to generate flow' };
+      }
+
+      if (result.success && result.data) {
+        return { success: true, data: result.data };
+      }
+
+      return { success: false, error: result.error || 'Invalid response' };
+    } catch (error) {
+      console.error('API call failed:', error);
+      return { success: false, error: 'Network error. Please try again.' };
+    }
+  };
 
   const handleSend = async (content: string) => {
     const userMessage: Message = {
@@ -75,23 +98,12 @@ Or just describe your workflow and I'll visualize it!`,
     setMessages((prev) => [...prev, userMessage]);
     setIsLoading(true);
 
-    // Simulate small delay for better UX
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
     try {
       let assistantMessage: Message;
 
-      // Check if this looks like a workflow request
-      if (isWorkflowRequest(content)) {
-        // Determine whether to replace or append
-        const shouldAppend = nodes.length > 0 && 
-          (content.toLowerCase().includes('add') || 
-           content.toLowerCase().includes('append') ||
-           content.toLowerCase().includes('추가'));
-
-        const result = shouldAppend 
-          ? appendFromText(content)
-          : loadFromText(content);
+      // Check if it's a simple format that can be parsed locally (faster)
+      if (isSimpleFormat(content)) {
+        const result = loadFromText(content);
 
         if (result.success && result.graph) {
           const nodeCount = result.graph.nodes.length;
@@ -100,64 +112,121 @@ Or just describe your workflow and I'll visualize it!`,
           assistantMessage = {
             id: (Date.now() + 1).toString(),
             role: 'assistant',
-            content: `✨ Workflow created successfully!
+            content: `✨ Workflow created!
 
-**Generated:**
-• ${nodeCount} node${nodeCount !== 1 ? 's' : ''}
-• ${edgeCount} connection${edgeCount !== 1 ? 's' : ''}
+**Generated:** ${nodeCount} nodes, ${edgeCount} connections
 
 ${result.rawParsed?.steps.map((step, i) => 
-  `${i + 1}. **${step.name}** (${step.type})`
+  `${i + 1}. **${step.name}**`
 ).join('\n')}
 
-The workflow is now visible on the canvas. You can drag nodes to rearrange them or click "Add Node" to add more steps.`,
+You can drag nodes to rearrange them or double-click to edit labels.`,
             timestamp: new Date(),
             status: 'success',
           };
         } else {
-          assistantMessage = {
-            id: (Date.now() + 1).toString(),
-            role: 'assistant',
-            content: `❌ Couldn't create workflow: ${result.error}
-
-**Tips:**
-• Use arrows: "A -> B -> C"
-• Use commas: "Step 1, Step 2, Step 3"
-• Or describe steps on separate lines`,
-            timestamp: new Date(),
-            status: 'error',
-          };
+          // Fall back to AI if local parsing fails
+          assistantMessage = await handleAIGeneration(content);
         }
       } else {
-        // General conversation
-        assistantMessage = {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content: `I can help you create workflows! Try describing your process using one of these formats:
-
-• **Arrows:** "Receive order -> Process payment -> Ship item"
-• **Steps:** "1. Get input, 2. Validate, 3. Save"
-• **Natural:** "First authenticate then fetch data then display"
-
-What workflow would you like to create?`,
-          timestamp: new Date(),
-        };
+        // Use AI for complex/natural language requests
+        assistantMessage = await handleAIGeneration(content);
       }
 
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (error) {
       console.error('Error processing message:', error);
+      setError('Failed to process message');
       
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: 'Sorry, something went wrong. Please try again.',
+        content: `❌ Sorry, something went wrong. Please try again.
+
+**Tips:**
+• Check your internet connection
+• Try a simpler description
+• Use arrow format: "A -> B -> C"`,
         timestamp: new Date(),
         status: 'error',
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleAIGeneration = async (content: string): Promise<Message> => {
+    const result = await generateFlowWithAI(content);
+
+    if (result.success && result.data) {
+      // Load the AI-generated flow into the store
+      loadFromAPIResponse(result.data);
+      
+      const nodeCount = result.data.nodes.length;
+      const edgeCount = result.data.edges.length;
+
+      // Get node labels for display
+      const nodeLabels = result.data.nodes
+        .slice(0, 5)
+        .map((n, i) => `${i + 1}. **${n.data.label}** (${n.type})`)
+        .join('\n');
+      
+      const moreNodes = nodeCount > 5 ? `\n... and ${nodeCount - 5} more nodes` : '';
+
+      return {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: `✨ AI-generated workflow created!
+
+**Generated:** ${nodeCount} nodes, ${edgeCount} connections
+
+${nodeLabels}${moreNodes}
+
+The workflow is now visible on the canvas. You can:
+• Drag nodes to rearrange
+• Double-click to edit labels
+• Click "Auto Layout" to reorganize`,
+        timestamp: new Date(),
+        status: 'success',
+      };
+    } else {
+      // Check if it's an API key error
+      const isApiKeyError = result.error?.toLowerCase().includes('api key');
+      
+      if (isApiKeyError) {
+        // Fall back to local parsing
+        const localResult = loadFromText(content);
+        
+        if (localResult.success && localResult.graph) {
+          return {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            content: `⚠️ AI service not configured. Using local parser instead.
+
+**Generated:** ${localResult.graph.nodes.length} nodes, ${localResult.graph.edges.length} connections
+
+For AI-powered generation, configure your OpenAI API key in the environment variables.`,
+            timestamp: new Date(),
+            status: 'warning',
+          };
+        }
+      }
+
+      setError(result.error || 'Failed to generate flow');
+      
+      return {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: `❌ ${result.error || 'Failed to generate flow'}
+
+**Try these alternatives:**
+• Use arrow format: "Login -> Validate -> Dashboard"
+• Use comma format: "Step 1, Step 2, Step 3"
+• Simplify your description`,
+        timestamp: new Date(),
+        status: 'error',
+      };
     }
   };
 
@@ -183,7 +252,7 @@ What workflow would you like to create?`,
               </span>
             </h2>
             <p className="text-xs text-flow-text-muted">
-              Text-to-Graph workflow generator
+              AI-powered workflow generator
             </p>
           </div>
         </div>
@@ -211,12 +280,16 @@ What workflow would you like to create?`,
                     ? "bg-green-500/10 border border-green-500/30"
                     : message.status === 'error'
                     ? "bg-red-500/10 border border-red-500/30"
+                    : message.status === 'warning'
+                    ? "bg-yellow-500/10 border border-yellow-500/30"
                     : "bg-flow-accent/10 border border-flow-accent/30"
                 )}>
                   {message.status === 'success' ? (
                     <CheckCircle className="w-4 h-4 text-green-500" />
                   ) : message.status === 'error' ? (
                     <XCircle className="w-4 h-4 text-red-500" />
+                  ) : message.status === 'warning' ? (
+                    <AlertTriangle className="w-4 h-4 text-yellow-500" />
                   ) : (
                     <Bot className="w-4 h-4 text-flow-accent" />
                   )}
@@ -271,10 +344,13 @@ What workflow would you like to create?`,
               <Loader2 className="w-4 h-4 text-flow-accent animate-spin" />
             </div>
             <div className="bg-flow-surface border border-flow-border rounded-2xl rounded-bl-md px-4 py-3">
-              <div className="flex gap-1.5">
-                <span className="w-2 h-2 bg-flow-accent/60 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="w-2 h-2 bg-flow-accent/60 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="w-2 h-2 bg-flow-accent/60 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+              <div className="flex items-center gap-2">
+                <div className="flex gap-1.5">
+                  <span className="w-2 h-2 bg-flow-accent/60 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <span className="w-2 h-2 bg-flow-accent/60 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <span className="w-2 h-2 bg-flow-accent/60 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+                <span className="text-xs text-flow-text-muted ml-2">Generating workflow...</span>
               </div>
             </div>
           </motion.div>

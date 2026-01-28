@@ -1,5 +1,5 @@
 export { useFlowStore } from './useFlowStore';
-export type { FlowNode, FlowEdge, NodeData } from './useFlowStore';
+export type { FlowNode, FlowEdge, NodeData, APIFlowResponse, APIFlowNode, APIFlowEdge } from './useFlowStore';
 
 // Re-export graph types for convenience
 export type {

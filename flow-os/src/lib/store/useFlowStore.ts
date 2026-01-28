@@ -27,6 +27,26 @@ export type NodeData = {
 export type FlowNode = Node<NodeData>;
 export type FlowEdge = Edge;
 
+// API Response types
+export interface APIFlowNode {
+  id: string;
+  type: 'default' | 'input' | 'output' | 'decision';
+  position: { x: number; y: number };
+  data: { label: string };
+}
+
+export interface APIFlowEdge {
+  id: string;
+  source: string;
+  target: string;
+  label?: string;
+}
+
+export interface APIFlowResponse {
+  nodes: APIFlowNode[];
+  edges: APIFlowEdge[];
+}
+
 interface FlowState {
   // State
   nodes: FlowNode[];
@@ -35,6 +55,7 @@ interface FlowState {
   isProcessing: boolean;
   lastConversionResult: TextToGraphResult | null;
   shouldFitView: boolean; // Flag to trigger fitView in canvas
+  lastError: string | null;
   
   // Node/Edge Actions
   setNodes: (nodes: FlowNode[]) => void;
@@ -53,6 +74,10 @@ interface FlowState {
   loadFromGraph: (graph: GraphStructure) => void;
   appendFromText: (text: string, options?: GraphLayoutOptions) => TextToGraphResult;
   setProcessing: (processing: boolean) => void;
+  
+  // API Actions
+  loadFromAPIResponse: (response: APIFlowResponse) => void;
+  setError: (error: string | null) => void;
   
   // Layout Actions
   applyLayout: () => void;
@@ -90,6 +115,32 @@ function graphToFlowFormat(graph: GraphStructure): { nodes: FlowNode[]; edges: F
   return { nodes, edges };
 }
 
+/**
+ * Convert API response to FlowNode/FlowEdge format
+ */
+function apiResponseToFlowFormat(response: APIFlowResponse): { nodes: FlowNode[]; edges: FlowEdge[] } {
+  const nodes: FlowNode[] = response.nodes.map(node => ({
+    id: node.id,
+    type: 'workflow', // Use our custom workflow node type
+    position: node.position,
+    data: {
+      label: node.data.label,
+      type: node.type, // Store the API node type in data
+    },
+  }));
+
+  const edges: FlowEdge[] = response.edges.map(edge => ({
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    label: edge.label,
+    animated: true,
+    style: { stroke: '#00F0FF', strokeWidth: 2 },
+  }));
+
+  return { nodes, edges };
+}
+
 // ============================================================================
 // Initial State
 // ============================================================================
@@ -111,6 +162,7 @@ export const useFlowStore = create<FlowState>()(
       isProcessing: false,
       lastConversionResult: null,
       shouldFitView: false,
+      lastError: null,
 
       // Node/Edge Actions
       setNodes: (nodes) => set({ nodes }),
@@ -310,6 +362,32 @@ export const useFlowStore = create<FlowState>()(
       },
 
       setShouldFitView: (should) => set({ shouldFitView: should }),
+
+      // API Actions
+      loadFromAPIResponse: (response) => {
+        const { nodes, edges } = apiResponseToFlowFormat(response);
+        
+        // Apply dagre layout for optimal positioning
+        const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
+          nodes,
+          edges,
+          {
+            direction: 'TB',
+            nodeSep: 80,
+            rankSep: 120,
+          }
+        );
+        
+        set({
+          nodes: layoutedNodes,
+          edges: layoutedEdges,
+          selectedNode: null,
+          shouldFitView: true,
+          lastError: null,
+        });
+      },
+
+      setError: (error) => set({ lastError: error }),
     }),
     { name: 'flow-store' }
   )
