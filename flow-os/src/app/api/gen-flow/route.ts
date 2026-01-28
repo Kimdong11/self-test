@@ -194,13 +194,13 @@ export async function POST(request: NextRequest) {
       data: flowData,
     });
 
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('Error generating flow:', error);
     
-    // Handle specific errors
-    if (error instanceof Error) {
-      const message = error.message.toLowerCase();
-      const fullMessage = error.message;
+    // Get error details
+    const errorObj = error as { message?: string; status?: number; statusText?: string };
+    const fullMessage = errorObj?.message || String(error);
+    const message = fullMessage.toLowerCase();
       
       if (message.includes('api key') || message.includes('api_key') || message.includes('invalid')) {
         return NextResponse.json(
@@ -214,17 +214,29 @@ export async function POST(request: NextRequest) {
         );
       }
       
-      if (message.includes('quota') || message.includes('rate') || message.includes('resource')) {
+      if (message.includes('quota') || message.includes('rate') || message.includes('resource') || message.includes('429')) {
         return NextResponse.json(
           { 
             error: 'Rate limit exceeded or quota exhausted.', 
             code: 'RATE_LIMIT',
             help: 'Wait a moment and try again, or check your quota at Google AI Studio',
-            details: fullMessage
+            details: fullMessage,
+            debug: 'Try enabling the API at: https://console.cloud.google.com/apis/library/generativelanguage.googleapis.com'
           },
           { status: 429 }
         );
       }
+      
+      // Return full error for debugging any other case
+      return NextResponse.json(
+        { 
+          error: 'Generation failed', 
+          code: 'UNKNOWN_ERROR',
+          details: fullMessage,
+          rawError: JSON.stringify(error, Object.getOwnPropertyNames(error))
+        },
+        { status: 500 }
+      );
 
       if (message.includes('permission') || message.includes('denied') || message.includes('not enabled')) {
         return NextResponse.json(
