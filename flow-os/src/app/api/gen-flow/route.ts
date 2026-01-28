@@ -69,7 +69,7 @@ export async function GET() {
   return NextResponse.json({
     status: 'ok',
     provider: 'Google Gemini',
-    model: 'gemini-1.5-flash-latest',
+    model: 'gemini-1.5-flash',
     apiKeyConfigured: isConfigured,
     apiKeyPrefix: apiKey ? `${apiKey.substring(0, 10)}...` : 'not set',
     timestamp: new Date().toISOString(),
@@ -111,7 +111,7 @@ export async function POST(request: NextRequest) {
     const genAI = new GoogleGenerativeAI(apiKey);
     
     // Use gemini-pro model (widely available)
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-latest' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
     // Generate content with simple prompt
     const fullPrompt = PROMPT_TEMPLATE + prompt;
