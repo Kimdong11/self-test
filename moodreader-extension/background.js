@@ -3,14 +3,17 @@
  * Handles API calls, state management, and message routing
  * 
  * Security: API key encoding, input validation
- * Performance: Response caching
+ * Performance: Response caching with chrome.alarms cleanup
  */
 
 import { analyzeSentiment, getFallbackMusicQuery, generateAlternativeQuery } from './lib/gemini.js';
 import { searchYouTubeVideo, FALLBACK_VIDEOS, getRandomCuratedVideo } from './lib/youtube.js';
-import { getCachedAnalysis, setCachedAnalysis, clearCache } from './lib/cache.js';
-import { encodeApiKey, decodeApiKey, isValidApiKeyFormat, sanitizeObject } from './lib/security.js';
+import { getCachedAnalysis, setCachedAnalysis, clearCache, initializeCacheCleanup, handleCacheAlarm } from './lib/cache.js';
+import { encodeApiKey, decodeApiKey, isValidApiKeyFormat, sanitizeObject, sanitizeDomain } from './lib/security.js';
 import { DEFAULT_SETTINGS, ERROR_CODES } from './lib/constants.js';
+import { Logger } from './lib/logger.js';
+
+const log = Logger.scope('Background');
 
 // Current state
 let currentState = {
@@ -32,6 +35,7 @@ async function initializeSettings() {
   const stored = await chrome.storage.local.get('settings');
   if (!stored.settings) {
     await chrome.storage.local.set({ settings: DEFAULT_SETTINGS });
+    log.info('Default settings initialized');
   }
 }
 
@@ -39,7 +43,6 @@ async function getSettings() {
   const { settings } = await chrome.storage.local.get('settings');
   const merged = { ...DEFAULT_SETTINGS, ...settings };
   
-  // Decode API key if it's encoded
   if (merged.apiKey && merged.apiKeyEncrypted) {
     merged.apiKey = decodeApiKey(merged.apiKey);
   }
@@ -51,20 +54,32 @@ async function updateSettings(newSettings) {
   const current = await chrome.storage.local.get('settings');
   const currentSettings = current.settings || DEFAULT_SETTINGS;
   
-  // Encode API key if it's being updated
+  // Handle API key encoding
   if (newSettings.apiKey !== undefined) {
-    if (newSettings.apiKey && isValidApiKeyFormat(newSettings.apiKey)) {
-      newSettings.apiKey = encodeApiKey(newSettings.apiKey);
-      newSettings.apiKeyEncrypted = true;
-    } else if (!newSettings.apiKey) {
+    if (newSettings.apiKey) {
+      if (isValidApiKeyFormat(newSettings.apiKey)) {
+        newSettings.apiKey = encodeApiKey(newSettings.apiKey);
+        newSettings.apiKeyEncrypted = true;
+        log.info('API key saved (encoded)');
+      } else {
+        log.warn('Invalid API key format provided');
+        return { error: 'Invalid API key format. Gemini API keys should start with "AIza".' };
+      }
+    } else {
       newSettings.apiKeyEncrypted = false;
     }
+  }
+  
+  // Handle domain sanitization
+  if (newSettings.excludedDomains) {
+    newSettings.excludedDomains = newSettings.excludedDomains
+      .map(d => sanitizeDomain(d))
+      .filter(Boolean);
   }
   
   const updated = { ...currentSettings, ...newSettings };
   await chrome.storage.local.set({ settings: updated });
   
-  // Return with decoded key for immediate use
   if (updated.apiKey && updated.apiKeyEncrypted) {
     return { ...updated, apiKey: decodeApiKey(updated.apiKey) };
   }
@@ -98,7 +113,6 @@ async function handleAnalyzeRequest(text, tabId, context = {}) {
     };
   }
 
-  // Validate text input
   if (!text || typeof text !== 'string' || text.trim().length < 50) {
     return {
       success: false,
@@ -108,7 +122,6 @@ async function handleAnalyzeRequest(text, tabId, context = {}) {
   }
 
   try {
-    // Send loading state
     chrome.tabs.sendMessage(tabId, { 
       type: 'UPDATE_STATE', 
       state: { isLoading: true, loadingMessage: '🎵 Analyzing mood & context...' } 
@@ -118,26 +131,20 @@ async function handleAnalyzeRequest(text, tabId, context = {}) {
     let result = getCachedAnalysis(text);
     
     if (!result) {
-      // Analyze with Gemini
+      log.info('Cache miss, calling Gemini API');
       result = await analyzeSentiment(text, settings.apiKey, context);
-      
-      // Sanitize and cache result
       result = sanitizeObject(result);
       setCachedAnalysis(text, result);
     } else {
-      console.log('Using cached analysis result');
+      log.info('Using cached analysis result');
     }
     
-    console.log('Analysis result:', result);
-    
-    // Search for video
     const video = await searchYouTubeVideo(result.search_query);
     
     if (!video) {
       throw new Error('Could not find a matching video');
     }
 
-    // Update state
     currentState = {
       isPlaying: true,
       currentMood: result.mood_tag,
@@ -151,7 +158,6 @@ async function handleAnalyzeRequest(text, tabId, context = {}) {
 
     await chrome.storage.local.set({ currentState });
 
-    // Send to content script
     chrome.tabs.sendMessage(tabId, {
       type: 'PLAY_MUSIC',
       data: {
@@ -166,9 +172,10 @@ async function handleAnalyzeRequest(text, tabId, context = {}) {
       }
     }).catch(() => {});
 
+    log.info('Analysis complete', { mood: result.mood_tag });
     return { success: true, data: currentState };
   } catch (error) {
-    console.error('Analysis failed:', error);
+    log.error('Analysis failed', error);
     
     chrome.tabs.sendMessage(tabId, {
       type: 'UPDATE_STATE',
@@ -184,7 +191,6 @@ async function handleAnalyzeRequest(text, tabId, context = {}) {
 }
 
 async function handleManualMood(mood, tabId, context = {}) {
-  // Validate mood
   const validMoods = ['focus', 'relax', 'sad', 'energetic', 'cinematic', 'nature'];
   if (!validMoods.includes(mood)) {
     return { success: false, error: 'Invalid mood type' };
@@ -196,7 +202,7 @@ async function handleManualMood(mood, tabId, context = {}) {
     let video = await searchYouTubeVideo(moodData.search_query);
     
     if (!video || !video.videoId) {
-      console.log('Using curated video for mood:', mood);
+      log.info('Using curated video for mood:', mood);
       video = getRandomCuratedVideo(mood);
     }
     
@@ -232,7 +238,7 @@ async function handleManualMood(mood, tabId, context = {}) {
 
     return { success: true, data: currentState };
   } catch (error) {
-    console.error('Manual mood selection failed:', error);
+    log.error('Manual mood selection failed', error);
     return { success: false, error: error.message };
   }
 }
@@ -250,7 +256,7 @@ async function handleSkipSong(tabId) {
       currentState.skipCount
     );
     
-    console.log(`Skip #${currentState.skipCount}, trying query: ${alternativeQuery}`);
+    log.info(`Skip #${currentState.skipCount}`, { query: alternativeQuery });
     
     const video = await searchYouTubeVideo(alternativeQuery);
     
@@ -279,6 +285,7 @@ async function handleSkipSong(tabId) {
     
     return { success: false, error: 'Could not find alternative video' };
   } catch (error) {
+    log.error('Skip failed', error);
     return { success: false, error: error.message };
   }
 }
@@ -313,7 +320,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         case 'GET_SETTINGS': {
           const settings = await getSettings();
-          // Don't send the full encoded key back
           sendResponse({ 
             success: true, 
             settings: {
@@ -326,15 +332,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         case 'GET_SETTINGS_FULL': {
-          // Only for popup - returns decoded API key
           const settings = await getSettings();
           sendResponse({ success: true, settings });
           break;
         }
 
         case 'UPDATE_SETTINGS': {
-          const settings = await updateSettings(message.settings);
-          sendResponse({ success: true, settings });
+          const result = await updateSettings(message.settings);
+          if (result.error) {
+            sendResponse({ success: false, error: result.error });
+          } else {
+            sendResponse({ success: true, settings: result });
+          }
           break;
         }
 
@@ -378,7 +387,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ success: false, error: 'Unknown message type' });
       }
     } catch (error) {
-      console.error('Message handler error:', error);
+      log.error('Message handler error', error);
       sendResponse({ success: false, error: error.message });
     }
   })();
@@ -387,17 +396,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // ============================================
+// ALARM LISTENER (for cache cleanup)
+// ============================================
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  handleCacheAlarm(alarm);
+});
+
+// ============================================
 // LIFECYCLE EVENTS
 // ============================================
 
 chrome.runtime.onInstalled.addListener(async () => {
   await initializeSettings();
-  console.log('MoodReader extension installed');
+  await initializeCacheCleanup();
+  log.info('MoodReader extension installed');
 });
 
 chrome.runtime.onStartup.addListener(async () => {
+  await initializeCacheCleanup();
+  
   const { currentState: savedState } = await chrome.storage.local.get('currentState');
   if (savedState) {
     currentState = savedState;
   }
+  log.info('MoodReader extension started');
 });

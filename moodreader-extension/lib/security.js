@@ -3,6 +3,10 @@
  * Handles encryption, sanitization, and security-related functions
  */
 
+import { Logger } from './logger.js';
+
+const log = Logger.scope('Security');
+
 /**
  * Simple encryption key derived from extension ID
  * Note: This is obfuscation, not true encryption. For production,
@@ -19,14 +23,12 @@ export function encodeApiKey(apiKey) {
   if (!apiKey) return '';
   
   try {
-    // Base64 encode with salt
     const salted = ENCRYPTION_SALT + apiKey;
     const encoded = btoa(unescape(encodeURIComponent(salted)));
-    // Reverse and add checksum
     return encoded.split('').reverse().join('') + '_' + generateChecksum(apiKey);
   } catch (error) {
-    console.error('Failed to encode API key:', error);
-    return apiKey; // Fallback to plain
+    log.error('Failed to encode API key', error);
+    return apiKey;
   }
 }
 
@@ -39,23 +41,20 @@ export function decodeApiKey(encodedKey) {
   if (!encodedKey) return '';
   
   try {
-    // Remove checksum
     const parts = encodedKey.split('_');
-    if (parts.length < 2) return encodedKey; // Not encoded
+    if (parts.length < 2) return encodedKey;
     
     const encoded = parts.slice(0, -1).join('_');
-    // Reverse and decode
     const reversed = encoded.split('').reverse().join('');
     const decoded = decodeURIComponent(escape(atob(reversed)));
     
-    // Remove salt
     if (decoded.startsWith(ENCRYPTION_SALT)) {
       return decoded.substring(ENCRYPTION_SALT.length);
     }
-    return encodedKey; // Not properly encoded
+    return encodedKey;
   } catch (error) {
-    console.error('Failed to decode API key:', error);
-    return encodedKey; // Return as-is if decoding fails
+    log.error('Failed to decode API key', error);
+    return encodedKey;
   }
 }
 
@@ -110,7 +109,7 @@ export function sanitizeObject(obj) {
       sanitized[key] = escapeHtml(value);
     } else if (Array.isArray(value)) {
       sanitized[key] = value.map(v => typeof v === 'string' ? escapeHtml(v) : v);
-    } else if (typeof value === 'object') {
+    } else if (typeof value === 'object' && value !== null) {
       sanitized[key] = sanitizeObject(value);
     } else {
       sanitized[key] = value;
@@ -120,14 +119,27 @@ export function sanitizeObject(obj) {
 }
 
 /**
- * Validate API key format
+ * Validate API key format (enhanced validation)
+ * Gemini API keys start with "AIza" and are 39 characters
  * @param {string} apiKey - API key to validate
  * @returns {boolean} - Whether key appears valid
  */
 export function isValidApiKeyFormat(apiKey) {
   if (!apiKey || typeof apiKey !== 'string') return false;
-  // Gemini API keys are typically 39 characters
-  return apiKey.length >= 30 && apiKey.length <= 50 && /^[A-Za-z0-9_-]+$/.test(apiKey);
+  
+  // Gemini API keys typically:
+  // - Start with "AIza"
+  // - Are 39 characters long
+  // - Contain only alphanumeric, underscore, and hyphen
+  const isValidPrefix = apiKey.startsWith('AIza');
+  const isValidLength = apiKey.length >= 35 && apiKey.length <= 45;
+  const isValidChars = /^[A-Za-z0-9_-]+$/.test(apiKey);
+  
+  if (!isValidPrefix) {
+    log.warn('API key does not start with expected prefix');
+  }
+  
+  return isValidPrefix && isValidLength && isValidChars;
 }
 
 /**
@@ -145,6 +157,16 @@ export function isValidUrl(url) {
 }
 
 /**
+ * Validate YouTube video ID format
+ * @param {string} videoId - Video ID to validate
+ * @returns {boolean} - Whether video ID is valid format
+ */
+export function isValidVideoId(videoId) {
+  if (!videoId || typeof videoId !== 'string') return false;
+  return /^[a-zA-Z0-9_-]{11}$/.test(videoId);
+}
+
+/**
  * Create safe element with text content (XSS-safe)
  * @param {string} tag - HTML tag name
  * @param {string} text - Text content
@@ -155,15 +177,47 @@ export function createSafeElement(tag, text = '', attributes = {}) {
   const element = document.createElement(tag);
   element.textContent = text;
   
+  // Whitelist of safe attributes
+  const safeAttributes = ['class', 'id', 'title', 'data-', 'aria-', 'role'];
+  
   for (const [key, value] of Object.entries(attributes)) {
+    // Block event handlers and dangerous attributes
+    if (key.startsWith('on') || key === 'href' || key === 'src') {
+      log.warn(`Blocked potentially dangerous attribute: ${key}`);
+      continue;
+    }
+    
     if (key === 'class') {
       element.className = value;
     } else if (key === 'style' && typeof value === 'object') {
       Object.assign(element.style, value);
-    } else if (!key.startsWith('on')) { // Prevent event handler injection
-      element.setAttribute(key, value);
+    } else if (safeAttributes.some(safe => key === safe || key.startsWith(safe))) {
+      element.setAttribute(key, escapeHtml(String(value)));
     }
   }
   
   return element;
+}
+
+/**
+ * Sanitize domain for exclusion list
+ * @param {string} domain - Domain to sanitize
+ * @returns {string|null} - Sanitized domain or null if invalid
+ */
+export function sanitizeDomain(domain) {
+  if (!domain || typeof domain !== 'string') return null;
+  
+  // Remove protocol and path
+  let cleaned = domain
+    .toLowerCase()
+    .replace(/^(https?:\/\/)?(www\.)?/, '')
+    .replace(/\/.*$/, '')
+    .trim();
+  
+  // Validate domain format
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(cleaned)) {
+    return null;
+  }
+  
+  return cleaned;
 }

@@ -1,7 +1,13 @@
 /**
  * MoodReader Caching Module
  * Handles API response caching for better performance
+ * 
+ * Uses chrome.alarms for periodic cleanup (Service Worker compatible)
  */
+
+import { Logger } from './logger.js';
+
+const log = Logger.scope('Cache');
 
 // In-memory cache
 const memoryCache = new Map();
@@ -10,24 +16,33 @@ const memoryCache = new Map();
 const CACHE_CONFIG = {
   maxSize: 50,
   defaultTTL: 30 * 60 * 1000, // 30 minutes
-  storageKey: 'moodreader_cache'
+  cleanupAlarmName: 'moodreader_cache_cleanup'
 };
 
 /**
- * Generate cache key from text
+ * Generate cache key from text (improved to reduce collisions)
+ * Uses dual hash approach for better distribution
  * @param {string} text - Input text
  * @returns {string} - Cache key
  */
 function generateCacheKey(text) {
-  // Use first 200 chars + length for key
-  const sample = text.substring(0, 200).trim();
-  let hash = 0;
+  const sample = text.substring(0, 300).trim();
+  
+  // DJB2 hash
+  let hash1 = 5381;
   for (let i = 0; i < sample.length; i++) {
-    const char = sample.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
+    hash1 = ((hash1 << 5) + hash1) + sample.charCodeAt(i);
+    hash1 = hash1 & hash1;
   }
-  return `mood_${Math.abs(hash).toString(16)}_${text.length}`;
+  
+  // SDBM hash
+  let hash2 = 0;
+  for (let i = 0; i < sample.length; i++) {
+    hash2 = sample.charCodeAt(i) + (hash2 << 6) + (hash2 << 16) - hash2;
+    hash2 = hash2 & hash2;
+  }
+  
+  return `mood_${Math.abs(hash1).toString(16)}_${Math.abs(hash2).toString(16)}_${text.length}`;
 }
 
 /**
@@ -38,14 +53,14 @@ function generateCacheKey(text) {
 export function getCachedAnalysis(text) {
   const key = generateCacheKey(text);
   
-  // Check memory cache first
   if (memoryCache.has(key)) {
     const cached = memoryCache.get(key);
     if (Date.now() < cached.expires) {
-      console.log('Cache hit (memory):', key);
+      log.debug('Cache hit', { key });
       return cached.data;
     }
     memoryCache.delete(key);
+    log.debug('Cache expired', { key });
   }
   
   return null;
@@ -60,7 +75,6 @@ export function getCachedAnalysis(text) {
 export function setCachedAnalysis(text, result, ttl = CACHE_CONFIG.defaultTTL) {
   const key = generateCacheKey(text);
   
-  // Store in memory cache
   memoryCache.set(key, {
     data: result,
     expires: Date.now() + ttl,
@@ -71,17 +85,19 @@ export function setCachedAnalysis(text, result, ttl = CACHE_CONFIG.defaultTTL) {
   if (memoryCache.size > CACHE_CONFIG.maxSize) {
     const oldestKey = memoryCache.keys().next().value;
     memoryCache.delete(oldestKey);
+    log.debug('Cache eviction (LRU)', { evicted: oldestKey });
   }
   
-  console.log('Cached analysis:', key);
+  log.debug('Cache set', { key });
 }
 
 /**
  * Clear all cached data
  */
 export function clearCache() {
+  const size = memoryCache.size;
   memoryCache.clear();
-  console.log('Cache cleared');
+  log.info(`Cache cleared (${size} entries)`);
 }
 
 /**
@@ -124,9 +140,36 @@ export function cleanExpiredCache() {
   keysToDelete.forEach(key => memoryCache.delete(key));
   
   if (keysToDelete.length > 0) {
-    console.log(`Cleaned ${keysToDelete.length} expired cache entries`);
+    log.info(`Cleaned ${keysToDelete.length} expired cache entries`);
   }
 }
 
-// Clean expired cache periodically
-setInterval(cleanExpiredCache, 5 * 60 * 1000); // Every 5 minutes
+/**
+ * Initialize cache cleanup alarm (Service Worker compatible)
+ * Call this from background.js on install/startup
+ */
+export async function initializeCacheCleanup() {
+  try {
+    // Clear any existing alarm
+    await chrome.alarms.clear(CACHE_CONFIG.cleanupAlarmName);
+    
+    // Create periodic alarm (every 5 minutes)
+    await chrome.alarms.create(CACHE_CONFIG.cleanupAlarmName, {
+      periodInMinutes: 5
+    });
+    
+    log.info('Cache cleanup alarm initialized');
+  } catch (error) {
+    log.warn('Failed to create cache cleanup alarm', { error: error.message });
+  }
+}
+
+/**
+ * Handle alarm event for cache cleanup
+ * @param {chrome.alarms.Alarm} alarm
+ */
+export function handleCacheAlarm(alarm) {
+  if (alarm.name === CACHE_CONFIG.cleanupAlarmName) {
+    cleanExpiredCache();
+  }
+}

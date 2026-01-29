@@ -36,6 +36,16 @@
   ]);
 
   // ============================================
+  // SIMPLE LOGGER (Content script can't import modules)
+  // ============================================
+  
+  const log = {
+    info: (msg, extra) => console.info(`[MoodReader] ${msg}`, extra || ''),
+    warn: (msg, extra) => console.warn(`[MoodReader] ${msg}`, extra || ''),
+    error: (msg, err) => console.error(`[MoodReader] ${msg}`, err || '')
+  };
+
+  // ============================================
   // SECURITY UTILITIES
   // ============================================
   
@@ -78,6 +88,8 @@
 
   // ============================================
   // CONTEXT BUILDING
+  // Note: This function is duplicated from gemini.js because
+  // content scripts cannot use ES modules. Keep in sync!
   // ============================================
   
   function buildContext() {

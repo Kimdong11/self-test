@@ -3,6 +3,10 @@
  * Handles video search and playback with multiple fallback methods
  */
 
+import { Logger } from './logger.js';
+
+const log = Logger.scope('YouTube');
+
 // Piped API instances (more reliable than Invidious)
 const PIPED_INSTANCES = [
   'https://pipedapi.kavin.rocks',
@@ -112,7 +116,7 @@ async function searchWithPiped(query) {
           const videoId = validVideo.url?.replace('/watch?v=', '') || validVideo.id;
           
           if (videoId) {
-            console.log(`Piped search success: ${instance}`);
+            log.info(`Piped search success: ${instance}`);
             return {
               videoId: videoId,
               title: validVideo.title || 'Music'
@@ -121,7 +125,7 @@ async function searchWithPiped(query) {
         }
       }
     } catch (error) {
-      console.warn(`Piped instance ${instance} failed:`, error.message);
+      log.warn(`Piped instance ${instance} failed: ${error.message}`);
       continue;
     }
   }
@@ -152,7 +156,7 @@ async function searchWithInvidious(query) {
             item.lengthSeconds > 180
           ) || data[0];
           
-          console.log(`Invidious search success: ${instance}`);
+          log.info(`Invidious search success: ${instance}`);
           return {
             videoId: validVideo.videoId,
             title: validVideo.title || 'Music'
@@ -160,7 +164,7 @@ async function searchWithInvidious(query) {
         }
       }
     } catch (error) {
-      console.warn(`Invidious instance ${instance} failed:`, error.message);
+      log.warn(`Invidious instance ${instance} failed: ${error.message}`);
       continue;
     }
   }
@@ -206,7 +210,7 @@ function getCuratedVideo(query) {
  * @returns {Promise<{videoId: string, title: string}>}
  */
 export async function searchYouTubeVideo(query) {
-  console.log('Searching for:', query);
+  log.info(`Searching for: ${query}`);
   
   // Try Piped API first (most reliable)
   try {
@@ -215,7 +219,7 @@ export async function searchYouTubeVideo(query) {
       return pipedResult;
     }
   } catch (error) {
-    console.warn('Piped search failed:', error);
+    log.warn('Piped search failed', { error: error.message });
   }
   
   // Try Invidious API
@@ -225,11 +229,11 @@ export async function searchYouTubeVideo(query) {
       return invidiousResult;
     }
   } catch (error) {
-    console.warn('Invidious search failed:', error);
+    log.warn('Invidious search failed', { error: error.message });
   }
   
   // Fallback to curated videos (always works)
-  console.log('Using curated fallback for query:', query);
+  log.info(`Using curated fallback for query: ${query}`);
   return getCuratedVideo(query);
 }
 
