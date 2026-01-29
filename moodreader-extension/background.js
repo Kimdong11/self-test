@@ -134,24 +134,28 @@ async function handleAnalyzeRequest(text, tabId, context = {}) {
   }
 
   try {
-    // === PHASE 1: Check for cached results (fastest path) ===
+    // === PHASE 1: Check for cached mood (but always pick new video for variety) ===
     
-    // Check domain cache first
+    // Check domain cache for mood info (not video)
     const domainMood = getDomainMood(context.url, context.siteCategory);
-    if (domainMood) {
-      log.info('Domain cache hit - instant playback');
-      return await playWithMoodData(domainMood, tabId, context, text);
+    if (domainMood && instantPlayEnabled) {
+      log.info('Domain cache hit - using cached mood with new video selection');
+      // Use cached mood but get a NEW random video
+      const video = getRandomCuratedVideo(domainMood.mood_tag?.toLowerCase()?.replace(/\s+/g, '') || 'focus');
+      return await playWithMoodAndVideo(domainMood, video, tabId, context);
     }
     
     // Check text-based cache
     const cachedResult = getCachedAnalysis(text);
     if (cachedResult) {
-      log.info('Text cache hit - instant playback');
-      // Also cache by domain for future
+      log.info('Text cache hit - using cached mood with new video');
+      // Cache the mood by domain for future
       if (context.url) {
         setDomainMood(context.url, context.siteCategory, cachedResult);
       }
-      return await playWithMoodData(cachedResult, tabId, context, text);
+      // Get a new video for variety
+      const video = getRandomCuratedVideo(getMoodCategory(cachedResult));
+      return await playWithMoodAndVideo(cachedResult, video, tabId, context);
     }
 
     // === PHASE 2: Instant Playback Mode ===
@@ -241,13 +245,85 @@ async function handleAnalyzeRequest(text, tabId, context = {}) {
 }
 
 /**
- * Play music with mood data
+ * Get mood category from moodData for video selection
+ */
+function getMoodCategory(moodData) {
+  const moodTag = (moodData.mood_tag || '').toLowerCase();
+  
+  // Map common mood tags to categories
+  if (moodTag.includes('focus') || moodTag.includes('study') || moodTag.includes('work')) return 'focus';
+  if (moodTag.includes('relax') || moodTag.includes('calm') || moodTag.includes('peace')) return 'relax';
+  if (moodTag.includes('sad') || moodTag.includes('melanchol') || moodTag.includes('reflect')) return 'sad';
+  if (moodTag.includes('energ') || moodTag.includes('upbeat') || moodTag.includes('motiv')) return 'energetic';
+  if (moodTag.includes('cinema') || moodTag.includes('epic') || moodTag.includes('dramat')) return 'cinematic';
+  if (moodTag.includes('nature') || moodTag.includes('rain') || moodTag.includes('forest')) return 'nature';
+  if (moodTag.includes('piano') || moodTag.includes('classical')) return 'piano';
+  if (moodTag.includes('jazz') || moodTag.includes('cafe') || moodTag.includes('coffee')) return 'jazz';
+  if (moodTag.includes('ambient') || moodTag.includes('space') || moodTag.includes('atmosph')) return 'ambient';
+  if (moodTag.includes('electro') || moodTag.includes('synth')) return 'electronic';
+  
+  // Check energy level as fallback
+  if (moodData.energy !== undefined) {
+    if (moodData.energy > 0.6) return 'energetic';
+    if (moodData.energy < 0.3) return 'ambient';
+  }
+  
+  return 'focus'; // Default
+}
+
+/**
+ * Play music with mood data and specific video
+ */
+async function playWithMoodAndVideo(moodData, video, tabId, context) {
+  currentState = {
+    isPlaying: true,
+    currentMood: moodData.mood_tag,
+    currentQuery: moodData.search_query,
+    currentVideoId: video.videoId,
+    currentVideoTitle: video.title,
+    moodData: moodData,
+    context: context,
+    skipCount: 0
+  };
+
+  await chrome.storage.local.set({ currentState });
+
+  chrome.tabs.sendMessage(tabId, {
+    type: 'PLAY_MUSIC',
+    data: {
+      mood: moodData.mood_tag,
+      query: moodData.search_query,
+      videoId: video.videoId,
+      videoTitle: video.title,
+      energy: moodData.energy,
+      valence: moodData.valence,
+      tempo: moodData.tempo,
+      genres: moodData.genres
+    }
+  }).catch(() => {});
+
+  log.info('Playing with mood and video', { mood: moodData.mood_tag, videoId: video.videoId });
+  return { success: true, data: currentState };
+}
+
+/**
+ * Play music with mood data (searches for video)
  */
 async function playWithMoodData(moodData, tabId, context, text) {
-  const video = await searchYouTubeVideo(moodData.search_query);
+  // Try to get a curated video first for reliability
+  const category = getMoodCategory(moodData);
+  let video = getRandomCuratedVideo(category);
   
-  if (!video) {
-    throw new Error('Could not find a matching video');
+  // Optionally try API search for more variety (30% chance)
+  if (Math.random() < 0.3) {
+    try {
+      const searchResult = await searchYouTubeVideo(moodData.search_query);
+      if (searchResult && searchResult.videoId) {
+        video = searchResult;
+      }
+    } catch (e) {
+      log.warn('API search failed, using curated video', { error: e.message });
+    }
   }
 
   currentState = {
@@ -277,7 +353,7 @@ async function playWithMoodData(moodData, tabId, context, text) {
     }
   }).catch(() => {});
 
-  log.info('Playing with mood data', { mood: moodData.mood_tag });
+  log.info('Playing with mood data', { mood: moodData.mood_tag, videoId: video.videoId });
   return { success: true, data: currentState };
 }
 

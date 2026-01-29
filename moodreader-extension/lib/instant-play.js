@@ -47,26 +47,34 @@ const MOOD_KEYWORDS = {
 
 /**
  * Site category to default mood mapping
+ * Now with multiple options for variety
  */
 const SITE_MOOD_MAP = {
-  news: 'focus',
-  tech: 'focus',
-  academic: 'focus',
-  lifestyle: 'relax',
-  entertainment: 'cinematic',
-  blog: 'relax',
-  other: 'focus'
+  news: ['focus', 'cinematic'],
+  tech: ['focus', 'electronic', 'energetic'],
+  academic: ['focus', 'piano', 'ambient'],
+  lifestyle: ['relax', 'jazz', 'nature'],
+  entertainment: ['cinematic', 'electronic', 'energetic'],
+  blog: ['relax', 'focus', 'jazz'],
+  other: ['focus', 'relax', 'jazz', 'ambient', 'piano'] // More variety for uncategorized sites
 };
 
 /**
- * Time of day to mood preference
+ * Time of day to mood preference with multiple options
  */
 const TIME_MOOD_MAP = {
-  morning: { primary: 'relax', secondary: 'focus', energy: 0.4 },
-  afternoon: { primary: 'focus', secondary: 'energetic', energy: 0.6 },
-  evening: { primary: 'relax', secondary: 'cinematic', energy: 0.4 },
-  night: { primary: 'relax', secondary: 'sad', energy: 0.2 }
+  morning: { moods: ['relax', 'focus', 'nature'], energy: 0.4 },
+  afternoon: { moods: ['focus', 'energetic', 'jazz'], energy: 0.6 },
+  evening: { moods: ['relax', 'cinematic', 'jazz', 'piano'], energy: 0.4 },
+  night: { moods: ['relax', 'ambient', 'piano', 'nature'], energy: 0.2 }
 };
+
+/**
+ * Pick random item from array
+ */
+function pickRandom(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
 
 /**
  * Quick mood detection using keyword matching
@@ -101,16 +109,23 @@ export function quickMoodDetection(text, context = {}) {
     }
   }
   
-  // If no strong keyword match, use site category default
+  // If no strong keyword match, use site category default with variety
   if (!detectedMood || maxScore < 1.5) {
-    detectedMood = SITE_MOOD_MAP[siteCategory] || 'focus';
-    log.info('Using site category default mood', { siteCategory, mood: detectedMood });
+    const siteMoods = SITE_MOOD_MAP[siteCategory] || SITE_MOOD_MAP.other;
+    detectedMood = pickRandom(siteMoods);
+    log.info('Using site category mood (random)', { siteCategory, mood: detectedMood, options: siteMoods });
   } else {
     log.info('Keyword-based mood detection', { mood: detectedMood, score: maxScore });
   }
   
-  // Adjust based on time of day
+  // Adjust based on time of day (sometimes override with time-appropriate mood)
   const timePrefs = TIME_MOOD_MAP[timeOfDay] || TIME_MOOD_MAP.afternoon;
+  
+  // 30% chance to use time-based mood instead for variety
+  if (maxScore < 2 && Math.random() < 0.3) {
+    detectedMood = pickRandom(timePrefs.moods);
+    log.info('Using time-based mood override', { timeOfDay, mood: detectedMood });
+  }
   
   const duration = performance.now() - startTime;
   log.info(`Quick mood detection completed in ${duration.toFixed(2)}ms`);
@@ -125,6 +140,7 @@ export function quickMoodDetection(text, context = {}) {
 
 /**
  * Get instant playback data without API call
+ * Now with improved variety to avoid repetition
  * @param {Object} context - Context with siteCategory, timeOfDay, etc.
  * @param {string} text - Optional text for quick analysis
  * @returns {Object} - Playback data with video info
@@ -138,23 +154,24 @@ export function getInstantPlaybackData(context = {}, text = '') {
     const detection = quickMoodDetection(text, context);
     mood = detection.mood;
   } else {
-    // Use site category default
-    mood = SITE_MOOD_MAP[siteCategory] || 'focus';
+    // Use site category with random selection from options
+    const siteMoods = SITE_MOOD_MAP[siteCategory] || SITE_MOOD_MAP.other;
+    mood = pickRandom(siteMoods);
     
-    // Time-based adjustment
+    // Time-based adjustment (30% chance to override)
     const timePrefs = TIME_MOOD_MAP[timeOfDay];
-    if (timePrefs && Math.random() > 0.7) {
-      mood = timePrefs.primary;
+    if (timePrefs && Math.random() < 0.3) {
+      mood = pickRandom(timePrefs.moods);
     }
   }
   
-  // Get curated video for this mood
+  // Get curated video for this mood (now avoids recently played)
   const video = getRandomCuratedVideo(mood);
   
   // Build mood data
   const moodData = buildInstantMoodData(mood, context);
   
-  log.info('Instant playback data generated', { mood, videoId: video.videoId });
+  log.info('Instant playback data generated', { mood, videoId: video.videoId, category: siteCategory });
   
   return {
     mood: moodData.mood_tag,
@@ -223,6 +240,52 @@ function buildInstantMoodData(mood, context = {}) {
       genres: ['orchestral', 'cinematic'],
       instrumentation: ['orchestra', 'strings'],
       search_query: 'Epic cinematic music instrumental'
+    },
+    // New moods for variety
+    piano: {
+      mood_tag: 'Piano Serenity',
+      energy: 0.25,
+      valence: 0.55,
+      tempo: 'slow',
+      genres: ['classical', 'piano'],
+      instrumentation: ['piano'],
+      search_query: 'Beautiful piano music relaxing instrumental'
+    },
+    jazz: {
+      mood_tag: 'Smooth Jazz',
+      energy: 0.4,
+      valence: 0.65,
+      tempo: 'medium',
+      genres: ['jazz', 'cafe'],
+      instrumentation: ['piano', 'saxophone', 'bass'],
+      search_query: 'Smooth jazz coffee shop background music'
+    },
+    ambient: {
+      mood_tag: 'Ambient Space',
+      energy: 0.15,
+      valence: 0.5,
+      tempo: 'slow',
+      genres: ['ambient', 'atmospheric'],
+      instrumentation: ['synth', 'pad'],
+      search_query: 'Deep ambient music atmospheric soundscape'
+    },
+    nature: {
+      mood_tag: 'Nature Sounds',
+      energy: 0.1,
+      valence: 0.6,
+      tempo: 'slow',
+      genres: ['nature', 'ambient'],
+      instrumentation: ['nature sounds'],
+      search_query: 'Nature sounds rain forest relaxing'
+    },
+    electronic: {
+      mood_tag: 'Electronic Vibes',
+      energy: 0.7,
+      valence: 0.65,
+      tempo: 'medium',
+      genres: ['electronic', 'synthwave'],
+      instrumentation: ['synth', 'drums'],
+      search_query: 'Electronic chill music focus instrumental'
     }
   };
   
