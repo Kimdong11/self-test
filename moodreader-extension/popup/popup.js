@@ -15,19 +15,26 @@ document.addEventListener('DOMContentLoaded', async () => {
  */
 async function loadSettings() {
   try {
-    const response = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
+    // Use GET_SETTINGS_FULL to get the actual API key for the popup
+    const response = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS_FULL' });
     if (response.success) {
       const settings = response.settings;
 
-      // API Key
-      document.getElementById('api-key-input').value = settings.apiKey || '';
+      // API Key - show actual key in popup for editing
+      const apiKeyInput = document.getElementById('api-key-input');
+      if (apiKeyInput) {
+        apiKeyInput.value = settings.apiKey || '';
+      }
 
       // Volume
-      document.getElementById('volume-slider').value = settings.volume || 50;
-      document.getElementById('volume-value').textContent = `${settings.volume || 50}%`;
+      const volumeSlider = document.getElementById('volume-slider');
+      const volumeValue = document.getElementById('volume-value');
+      if (volumeSlider) volumeSlider.value = settings.volume || 50;
+      if (volumeValue) volumeValue.textContent = `${settings.volume || 50}%`;
 
       // Auto-analyze
-      document.getElementById('auto-analyze').checked = settings.autoAnalyze || false;
+      const autoAnalyze = document.getElementById('auto-analyze');
+      if (autoAnalyze) autoAnalyze.checked = settings.autoAnalyze !== false;
 
       // Excluded domains
       renderExcludedDomains(settings.excludedDomains || []);

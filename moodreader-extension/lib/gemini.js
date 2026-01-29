@@ -1,6 +1,9 @@
 /**
  * Gemini API Integration Module
  * Enhanced sentiment analysis with multi-dimensional mood detection
+ * 
+ * Performance: Request deduplication, timeout handling
+ * Security: Input validation, response sanitization
  */
 
 // Available Gemini models to try (in order of preference)
@@ -12,6 +15,10 @@ const GEMINI_MODELS = [
 ];
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+const API_TIMEOUT = 15000; // 15 seconds
+
+// Request deduplication - prevent duplicate concurrent requests
+const pendingRequests = new Map();
 
 /**
  * Enhanced system prompt for multi-dimensional mood analysis
@@ -154,6 +161,19 @@ export function buildContext(text, url, title = '') {
 }
 
 /**
+ * Generate request key for deduplication
+ */
+function generateRequestKey(text) {
+  const sample = text.substring(0, 100);
+  let hash = 0;
+  for (let i = 0; i < sample.length; i++) {
+    hash = ((hash << 5) - hash) + sample.charCodeAt(i);
+    hash = hash & hash;
+  }
+  return `req_${Math.abs(hash)}`;
+}
+
+/**
  * Analyze text and get music recommendation from Gemini
  * @param {string} text - The article text to analyze
  * @param {string} apiKey - Gemini API key
@@ -169,6 +189,13 @@ export async function analyzeSentiment(text, apiKey, context = {}) {
     throw new Error('No text provided for analysis');
   }
 
+  // Request deduplication - return existing promise if same request is pending
+  const requestKey = generateRequestKey(text);
+  if (pendingRequests.has(requestKey)) {
+    console.log('Returning existing pending request');
+    return pendingRequests.get(requestKey);
+  }
+
   // Build the prompt with context
   const contextString = `
 Context:
@@ -178,7 +205,7 @@ Context:
 - Language: ${context.language || 'en'}
 
 Input Text:
-${text}`;
+${text.substring(0, 1500)}`; // Limit text length
 
   const requestBody = {
     contents: [
@@ -219,20 +246,30 @@ ${text}`;
 
   let lastError = null;
 
-  // Try each model until one works
-  for (const model of GEMINI_MODELS) {
-    const url = `${GEMINI_API_BASE}/${model}:generateContent?key=${apiKey}`;
-    
+  // Create the analysis promise
+  const analysisPromise = (async () => {
     try {
-      console.log(`Trying Gemini model: ${model}`);
-      
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(requestBody)
-      });
+      // Try each model until one works
+      for (const model of GEMINI_MODELS) {
+        const url = `${GEMINI_API_BASE}/${model}:generateContent?key=${apiKey}`;
+        
+        try {
+          console.log(`Trying Gemini model: ${model}`);
+          
+          // Create AbortController for timeout
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
+          
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(requestBody),
+            signal: controller.signal
+          });
+          
+          clearTimeout(timeoutId);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -290,22 +327,38 @@ ${text}`;
         search_query: result.search_query || 'ambient instrumental background music'
       };
 
-      console.log(`Successfully analyzed with model: ${model}`, normalizedResult);
-      return normalizedResult;
-      
-    } catch (error) {
-      console.error(`Gemini API call failed with model ${model}:`, error);
-      lastError = error;
-      
-      // If it's not a 404, don't try other models
-      if (!error.message.includes('not found') && !error.message.includes('404')) {
-        throw error;
+          console.log(`Successfully analyzed with model: ${model}`, normalizedResult);
+          return normalizedResult;
+          
+        } catch (error) {
+          console.error(`Gemini API call failed with model ${model}:`, error);
+          lastError = error;
+          
+          // If it's a timeout or network error, try next model
+          if (error.name === 'AbortError') {
+            console.warn(`Model ${model} timed out, trying next...`);
+            continue;
+          }
+          
+          // If it's not a 404, don't try other models
+          if (!error.message.includes('not found') && !error.message.includes('404')) {
+            throw error;
+          }
+        }
       }
-    }
-  }
 
-  // If all models failed
-  throw lastError || new Error('All Gemini models failed');
+      // If all models failed
+      throw lastError || new Error('All Gemini models failed');
+    } finally {
+      // Clean up pending request
+      pendingRequests.delete(requestKey);
+    }
+  })();
+
+  // Store the promise for deduplication
+  pendingRequests.set(requestKey, analysisPromise);
+  
+  return analysisPromise;
 }
 
 /**

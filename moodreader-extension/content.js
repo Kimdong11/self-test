@@ -1,6 +1,9 @@
 /**
  * MoodReader Content Script
  * Handles text extraction and widget injection
+ * 
+ * Security: XSS-safe DOM manipulation
+ * Performance: Optimized text extraction with TreeWalker
  */
 
 (function() {
@@ -10,13 +13,73 @@
   if (window.__moodReaderInitialized) return;
   window.__moodReaderInitialized = true;
 
-  // Configuration
-  const MAX_TEXT_LENGTH = 1500; // Increased for better analysis
-  const EXCLUDED_TAGS = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'SVG', 'NAV', 'HEADER', 'FOOTER', 'ASIDE'];
+  // ============================================
+  // CONSTANTS
+  // ============================================
+  const TIMING = {
+    DYNAMIC_CONTENT_DELAY: 1000,
+    AUTO_MINIMIZE_DELAY: 1200,
+    PLAYER_INIT_DELAY: 1000
+  };
+
+  const TEXT_CONFIG = {
+    MAX_LENGTH: 1500,
+    MIN_LENGTH: 50,
+    MIN_PARAGRAPH_LENGTH: 20,
+    MIN_ARTICLE_LENGTH: 100
+  };
+
+  const EXCLUDED_TAGS = new Set([
+    'SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'SVG',
+    'NAV', 'HEADER', 'FOOTER', 'ASIDE', 'FORM',
+    'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'
+  ]);
+
+  // ============================================
+  // SECURITY UTILITIES
+  // ============================================
+  
+  /**
+   * Escape HTML to prevent XSS attacks
+   */
+  function escapeHtml(text) {
+    if (typeof text !== 'string') return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
 
   /**
-   * Build context for enhanced analysis
+   * Create safe element with text content (XSS-safe)
    */
+  function createSafeElement(tag, text = '', className = '') {
+    const element = document.createElement(tag);
+    element.textContent = text;
+    if (className) element.className = className;
+    return element;
+  }
+
+  /**
+   * Safely set element text content
+   */
+  function safeSetText(elementId, text) {
+    const el = document.getElementById(elementId);
+    if (el) el.textContent = text;
+  }
+
+  // ============================================
+  // STATE MANAGEMENT
+  // ============================================
+  let widget = null;
+  let player = null;
+  let isMinimized = false;
+  let currentVolume = 50;
+  let dragCleanup = null; // For cleaning up drag event listeners
+
+  // ============================================
+  // CONTEXT BUILDING
+  // ============================================
+  
   function buildContext() {
     const hour = new Date().getHours();
     let timeOfDay;
@@ -42,7 +105,6 @@
     else if (text.length < 1500) articleLength = 'medium';
     else articleLength = 'long';
 
-    // Detect language
     const koreanRegex = /[\uAC00-\uD7AF]/;
     const language = koreanRegex.test(text) ? 'ko' : 'en';
 
@@ -56,11 +118,46 @@
     };
   }
 
-  // Widget state
-  let widget = null;
-  let player = null;
-  let isMinimized = false;
-  let currentVolume = 50;
+  // ============================================
+  // OPTIMIZED TEXT EXTRACTION (TreeWalker)
+  // ============================================
+
+  /**
+   * Extract text using TreeWalker (more efficient than cloneNode)
+   */
+  function extractTextFromElementFast(element) {
+    const textParts = [];
+    
+    const walker = document.createTreeWalker(
+      element,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode: function(node) {
+          // Check if any parent is excluded
+          let parent = node.parentElement;
+          while (parent && parent !== element) {
+            if (EXCLUDED_TAGS.has(parent.tagName)) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            parent = parent.parentElement;
+          }
+          
+          // Only accept non-empty text
+          const text = node.textContent.trim();
+          if (text.length > 0) {
+            return NodeFilter.FILTER_ACCEPT;
+          }
+          return NodeFilter.FILTER_SKIP;
+        }
+      }
+    );
+
+    while (walker.nextNode()) {
+      textParts.push(walker.currentNode.textContent.trim());
+    }
+
+    return textParts.join(' ').replace(/\s+/g, ' ').trim();
+  }
 
   /**
    * Extract main article text from the page
@@ -71,18 +168,31 @@
     // Priority 1: Look for <article> element
     const article = document.querySelector('article');
     if (article) {
-      text = extractTextFromElement(article);
-      if (text.length >= 100) {
-        return text.substring(0, MAX_TEXT_LENGTH);
+      text = extractTextFromElementFast(article);
+      if (text.length >= TEXT_CONFIG.MIN_ARTICLE_LENGTH) {
+        return text.substring(0, TEXT_CONFIG.MAX_LENGTH);
       }
     }
 
     // Priority 2: Look for main content area
-    const mainContent = document.querySelector('main, [role="main"], .content, .post-content, .entry-content, .article-content');
-    if (mainContent) {
-      text = extractTextFromElement(mainContent);
-      if (text.length >= 100) {
-        return text.substring(0, MAX_TEXT_LENGTH);
+    const mainSelectors = [
+      'main',
+      '[role="main"]',
+      '.content',
+      '.post-content',
+      '.entry-content',
+      '.article-content',
+      '.article-body',
+      '#content'
+    ];
+    
+    for (const selector of mainSelectors) {
+      const mainContent = document.querySelector(selector);
+      if (mainContent) {
+        text = extractTextFromElementFast(mainContent);
+        if (text.length >= TEXT_CONFIG.MIN_ARTICLE_LENGTH) {
+          return text.substring(0, TEXT_CONFIG.MAX_LENGTH);
+        }
       }
     }
 
@@ -91,51 +201,45 @@
     const paragraphTexts = [];
     
     for (const p of paragraphs) {
+      // Quick check if parent is excluded
       if (!isExcludedElement(p)) {
         const pText = p.textContent.trim();
-        if (pText.length > 20) {
+        if (pText.length > TEXT_CONFIG.MIN_PARAGRAPH_LENGTH) {
           paragraphTexts.push(pText);
+          // Early exit if we have enough text
+          if (paragraphTexts.join(' ').length > TEXT_CONFIG.MAX_LENGTH) {
+            break;
+          }
         }
       }
     }
 
     text = paragraphTexts.join(' ');
-    return text.substring(0, MAX_TEXT_LENGTH);
+    return text.substring(0, TEXT_CONFIG.MAX_LENGTH);
   }
 
   /**
-   * Extract text from an element, excluding unwanted tags
-   */
-  function extractTextFromElement(element) {
-    const clone = element.cloneNode(true);
-    
-    // Remove excluded elements
-    EXCLUDED_TAGS.forEach(tag => {
-      clone.querySelectorAll(tag).forEach(el => el.remove());
-    });
-
-    return clone.textContent
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  /**
-   * Check if element should be excluded
+   * Check if element should be excluded (optimized)
    */
   function isExcludedElement(element) {
     let parent = element;
-    while (parent) {
-      if (EXCLUDED_TAGS.includes(parent.tagName)) {
+    let depth = 0;
+    const maxDepth = 10; // Prevent infinite loops
+    
+    while (parent && depth < maxDepth) {
+      if (EXCLUDED_TAGS.has(parent.tagName)) {
         return true;
       }
       parent = parent.parentElement;
+      depth++;
     }
     return false;
   }
 
-  /**
-   * Create and inject the floating widget
-   */
+  // ============================================
+  // WIDGET CREATION
+  // ============================================
+
   function createWidget() {
     if (widget) return;
 
@@ -143,7 +247,6 @@
     widget.id = 'moodreader-widget';
     widget.innerHTML = `
       <div class="moodreader-container" id="moodreader-container">
-        <!-- Header with drag handle -->
         <div class="moodreader-header" id="moodreader-header">
           <div class="moodreader-logo">
             <span class="moodreader-icon">🎵</span>
@@ -164,27 +267,22 @@
           </div>
         </div>
 
-        <!-- Loading State -->
         <div class="moodreader-loading" id="moodreader-loading" style="display: none;">
           <div class="moodreader-spinner"></div>
           <p id="moodreader-loading-text">Reading the mood of the page...</p>
         </div>
 
-        <!-- Main Content -->
         <div class="moodreader-content" id="moodreader-content">
-          <!-- Mood Display -->
           <div class="moodreader-mood" id="moodreader-mood-section" style="display: none;">
             <div class="moodreader-mood-tag" id="moodreader-mood-tag">--</div>
             <div class="moodreader-mood-details" id="moodreader-mood-details"></div>
             <div class="moodreader-video-title" id="moodreader-video-title">No music playing</div>
           </div>
 
-          <!-- YouTube Player Container (hidden) -->
           <div class="moodreader-player-wrapper" id="moodreader-player-wrapper" style="display: none;">
             <div id="moodreader-player"></div>
           </div>
 
-          <!-- Player Controls -->
           <div class="moodreader-controls" id="moodreader-controls" style="display: none;">
             <button class="moodreader-btn-control" id="moodreader-play-pause" title="Play/Pause">
               <svg id="moodreader-icon-play" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
@@ -210,7 +308,6 @@
             </div>
           </div>
 
-          <!-- Analyze Button (Initial State) -->
           <div class="moodreader-analyze-section" id="moodreader-analyze-section">
             <p class="moodreader-analyze-hint">Analyze this page to find the perfect background music</p>
             <button class="moodreader-btn-primary" id="moodreader-analyze-btn">
@@ -222,7 +319,6 @@
             </button>
           </div>
 
-          <!-- Manual Mood Selection -->
           <div class="moodreader-moods" id="moodreader-moods-section">
             <p class="moodreader-section-title">Or choose a mood:</p>
             <div class="moodreader-mood-buttons">
@@ -233,7 +329,6 @@
             </div>
           </div>
 
-          <!-- Error Message -->
           <div class="moodreader-error" id="moodreader-error" style="display: none;">
             <p id="moodreader-error-text"></p>
             <button class="moodreader-btn-secondary" id="moodreader-retry-btn">Retry</button>
@@ -241,7 +336,6 @@
         </div>
       </div>
 
-      <!-- Minimized State -->
       <div class="moodreader-minimized" id="moodreader-minimized" style="display: none;">
         <span class="moodreader-mini-icon">🎵</span>
         <div class="moodreader-mini-info">
@@ -272,94 +366,145 @@
     loadStoredVolume();
   }
 
-  /**
-   * Initialize widget event listeners
-   */
+  // ============================================
+  // EVENT LISTENERS (with cleanup support)
+  // ============================================
+
   function initializeWidgetListeners() {
-    // Analyze button (manual analysis)
-    document.getElementById('moodreader-analyze-btn')?.addEventListener('click', () => analyzePageMood(false));
-    document.getElementById('moodreader-retry-btn')?.addEventListener('click', () => analyzePageMood(false));
+    // Use event delegation for better performance
+    const container = document.getElementById('moodreader-widget');
+    if (!container) return;
 
-    // Manual mood buttons
-    document.querySelectorAll('.moodreader-mood-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const mood = e.currentTarget.dataset.mood;
-        selectManualMood(mood);
-      });
-    });
-
-    // Player controls
-    document.getElementById('moodreader-play-pause')?.addEventListener('click', togglePlayPause);
-    document.getElementById('moodreader-mini-play-pause')?.addEventListener('click', togglePlayPause);
-    document.getElementById('moodreader-skip')?.addEventListener('click', skipSong);
-
+    container.addEventListener('click', handleWidgetClick);
+    
     // Volume slider
-    document.getElementById('moodreader-volume')?.addEventListener('input', (e) => {
-      setVolume(parseInt(e.target.value));
-    });
+    const volumeSlider = document.getElementById('moodreader-volume');
+    if (volumeSlider) {
+      volumeSlider.addEventListener('input', handleVolumeChange);
+    }
 
-    // Minimize/Expand
-    document.getElementById('moodreader-minimize')?.addEventListener('click', minimizeWidget);
-    document.getElementById('moodreader-expand')?.addEventListener('click', expandWidget);
-
-    // Close
-    document.getElementById('moodreader-close')?.addEventListener('click', closeWidget);
-
-    // Make widget draggable
-    makeDraggable(
+    // Make widget draggable with cleanup
+    dragCleanup = makeDraggable(
       document.getElementById('moodreader-container'),
       document.getElementById('moodreader-header')
     );
   }
 
   /**
-   * Make an element draggable
+   * Event delegation handler for widget clicks
+   */
+  function handleWidgetClick(e) {
+    const target = e.target.closest('button');
+    if (!target) return;
+
+    const id = target.id;
+    const mood = target.dataset?.mood;
+
+    if (mood) {
+      selectManualMood(mood);
+    } else {
+      switch (id) {
+        case 'moodreader-analyze-btn':
+        case 'moodreader-retry-btn':
+          analyzePageMood(false);
+          break;
+        case 'moodreader-play-pause':
+        case 'moodreader-mini-play-pause':
+          togglePlayPause();
+          break;
+        case 'moodreader-skip':
+          skipSong();
+          break;
+        case 'moodreader-minimize':
+          minimizeWidget();
+          break;
+        case 'moodreader-expand':
+          expandWidget();
+          break;
+        case 'moodreader-close':
+          closeWidget();
+          break;
+      }
+    }
+  }
+
+  function handleVolumeChange(e) {
+    setVolume(parseInt(e.target.value, 10));
+  }
+
+  /**
+   * Make an element draggable with proper cleanup
+   * @returns {Function} Cleanup function
    */
   function makeDraggable(element, handle) {
-    let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+    if (!element || !handle) return () => {};
 
-    handle.onmousedown = dragMouseDown;
+    let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+    let isDragging = false;
 
     function dragMouseDown(e) {
+      if (e.target.closest('button')) return; // Don't drag when clicking buttons
+      
       e.preventDefault();
+      isDragging = true;
       pos3 = e.clientX;
       pos4 = e.clientY;
-      document.onmouseup = closeDragElement;
-      document.onmousemove = elementDrag;
+      
+      document.addEventListener('mouseup', closeDragElement);
+      document.addEventListener('mousemove', elementDrag);
     }
 
     function elementDrag(e) {
+      if (!isDragging) return;
+      
       e.preventDefault();
       pos1 = pos3 - e.clientX;
       pos2 = pos4 - e.clientY;
       pos3 = e.clientX;
       pos4 = e.clientY;
-      element.style.top = (element.offsetTop - pos2) + "px";
-      element.style.left = (element.offsetLeft - pos1) + "px";
+      
+      const newTop = element.offsetTop - pos2;
+      const newLeft = element.offsetLeft - pos1;
+      
+      // Keep within viewport
+      const maxTop = window.innerHeight - element.offsetHeight;
+      const maxLeft = window.innerWidth - element.offsetWidth;
+      
+      element.style.top = Math.max(0, Math.min(newTop, maxTop)) + 'px';
+      element.style.left = Math.max(0, Math.min(newLeft, maxLeft)) + 'px';
       element.style.right = 'auto';
       element.style.bottom = 'auto';
     }
 
     function closeDragElement() {
-      document.onmouseup = null;
-      document.onmousemove = null;
+      isDragging = false;
+      document.removeEventListener('mouseup', closeDragElement);
+      document.removeEventListener('mousemove', elementDrag);
     }
+
+    handle.addEventListener('mousedown', dragMouseDown);
+
+    // Return cleanup function
+    return () => {
+      handle.removeEventListener('mousedown', dragMouseDown);
+      document.removeEventListener('mouseup', closeDragElement);
+      document.removeEventListener('mousemove', elementDrag);
+    };
   }
 
-  /**
-   * Analyze page mood
-   * @param {boolean} isAuto - Whether this is an automatic analysis
-   */
+  // ============================================
+  // ANALYSIS & PLAYBACK
+  // ============================================
+
   async function analyzePageMood(isAuto = false) {
     const context = buildContext();
-    showLoading(isAuto ? `🎵 Analyzing ${context.siteCategory} content...` : 'Reading the mood of the page...');
+    showLoading(isAuto ? `🎵 Analyzing ${escapeHtml(context.siteCategory)} content...` : 'Reading the mood of the page...');
     hideError();
 
     const text = extractArticleText();
     
-    if (text.length < 50) {
+    if (text.length < TEXT_CONFIG.MIN_LENGTH) {
       if (isAuto) {
-        // For auto-analysis, just hide loading and show normal UI
         hideLoading();
         console.log('MoodReader: Not enough text for auto-analysis');
       } else {
@@ -379,7 +524,6 @@
 
       if (!response.success) {
         if (isAuto && response.error?.includes('API key')) {
-          // For auto-analysis without API key, just show normal UI
           hideLoading();
         } else {
           showError(response.error || 'Analysis failed');
@@ -395,12 +539,9 @@
     }
   }
 
-  /**
-   * Select manual mood
-   */
   async function selectManualMood(mood) {
     const context = buildContext();
-    showLoading(`Setting ${mood} mood...`);
+    showLoading(`Setting ${escapeHtml(mood)} mood...`);
     hideError();
 
     try {
@@ -419,7 +560,7 @@
   }
 
   /**
-   * Play music with given data
+   * Play music with given data (XSS-safe)
    */
   function playMusic(data) {
     hideLoading();
@@ -428,21 +569,37 @@
     showPlayerControls();
     showMoodSection();
 
-    // Update mood tag
-    document.getElementById('moodreader-mood-tag').textContent = data.mood;
-    document.getElementById('moodreader-mini-mood').textContent = data.mood;
-    document.getElementById('moodreader-video-title').textContent = truncateText(data.videoTitle, 40);
+    // Safely update text content (XSS-safe)
+    safeSetText('moodreader-mood-tag', data.mood || '--');
+    safeSetText('moodreader-mini-mood', data.mood || '--');
+    safeSetText('moodreader-video-title', truncateText(data.videoTitle || 'Unknown', 40));
 
-    // Show enhanced mood details if available
+    // Build mood details safely (XSS-safe)
     const detailsEl = document.getElementById('moodreader-mood-details');
-    if (detailsEl && (data.energy !== undefined || data.genres)) {
-      const energyBar = data.energy !== undefined 
-        ? `<span class="moodreader-energy" title="Energy: ${Math.round(data.energy * 100)}%">⚡${Math.round(data.energy * 100)}%</span>` 
-        : '';
-      const tempoText = data.tempo ? `<span class="moodreader-tempo" title="Tempo">${data.tempo}</span>` : '';
-      const genreText = data.genres?.length ? `<span class="moodreader-genres">${data.genres.slice(0, 2).join(' · ')}</span>` : '';
+    if (detailsEl) {
+      // Clear existing content
+      detailsEl.innerHTML = '';
       
-      detailsEl.innerHTML = [energyBar, tempoText, genreText].filter(Boolean).join(' ');
+      if (data.energy !== undefined) {
+        const energySpan = createSafeElement('span', `⚡${Math.round(data.energy * 100)}%`, 'moodreader-energy');
+        energySpan.title = `Energy: ${Math.round(data.energy * 100)}%`;
+        detailsEl.appendChild(energySpan);
+      }
+      
+      if (data.tempo) {
+        const tempoSpan = createSafeElement('span', data.tempo, 'moodreader-tempo');
+        tempoSpan.title = 'Tempo';
+        detailsEl.appendChild(document.createTextNode(' '));
+        detailsEl.appendChild(tempoSpan);
+      }
+      
+      if (data.genres?.length) {
+        const genreText = data.genres.slice(0, 2).join(' · ');
+        const genreSpan = createSafeElement('span', genreText, 'moodreader-genres');
+        detailsEl.appendChild(document.createTextNode(' '));
+        detailsEl.appendChild(genreSpan);
+      }
+      
       detailsEl.style.display = 'flex';
     }
 
@@ -450,26 +607,37 @@
     createYouTubePlayer(data.videoId);
     updatePlayPauseIcon(true);
 
-    // Auto-minimize widget after music starts (with small delay for smooth UX)
-    setTimeout(() => {
-      minimizeWidget();
-    }, 1200);
+    // Auto-minimize
+    setTimeout(minimizeWidget, TIMING.AUTO_MINIMIZE_DELAY);
   }
 
-  /**
-   * Create YouTube iframe player
-   */
+  // ============================================
+  // YOUTUBE PLAYER
+  // ============================================
+
   function createYouTubePlayer(videoId) {
     const wrapper = document.getElementById('moodreader-player-wrapper');
     const playerContainer = document.getElementById('moodreader-player');
 
-    // Remove existing player if any
+    if (!wrapper || !playerContainer) return;
+
+    // Remove existing player
     if (player) {
-      player.remove();
+      try {
+        player.remove();
+      } catch (e) {
+        console.warn('Error removing player:', e);
+      }
       player = null;
     }
 
-    // Build embed URL with all necessary params for autoplay
+    // Validate videoId format (security)
+    if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+      console.error('Invalid video ID format');
+      showError('Invalid video ID');
+      return;
+    }
+
     const params = new URLSearchParams({
       autoplay: '1',
       enablejsapi: '1',
@@ -485,7 +653,6 @@
     
     const embedUrl = `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
 
-    // Create iframe element
     const iframe = document.createElement('iframe');
     iframe.id = 'moodreader-youtube-iframe';
     iframe.width = '280';
@@ -495,23 +662,23 @@
     iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
     iframe.style.cssText = 'position: absolute; opacity: 0; pointer-events: none; top: -9999px; left: -9999px;';
     
-    // Handle iframe load errors
     iframe.onerror = () => {
       console.error('MoodReader: YouTube iframe failed to load');
       showError('Failed to load music player. Please try again.');
     };
 
-    // When iframe loads, ensure it's ready
     iframe.onload = () => {
       console.log('MoodReader: YouTube iframe loaded successfully');
-      // Try to ensure playback starts
       setTimeout(() => {
-        if (player && player.contentWindow) {
-          player.contentWindow.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
-          // Set volume
-          player.contentWindow.postMessage(`{"event":"command","func":"setVolume","args":[${currentVolume}]}`, '*');
+        if (player?.contentWindow) {
+          try {
+            player.contentWindow.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
+            player.contentWindow.postMessage(`{"event":"command","func":"setVolume","args":[${currentVolume}]}`, '*');
+          } catch (e) {
+            console.warn('Error sending postMessage:', e);
+          }
         }
-      }, 1000);
+      }, TIMING.PLAYER_INIT_DELAY);
     };
 
     playerContainer.innerHTML = '';
@@ -520,56 +687,50 @@
     player = iframe;
   }
 
-  /**
-   * Toggle play/pause
-   */
   function togglePlayPause() {
-    if (!player) return;
+    if (!player?.contentWindow) return;
 
-    // Use postMessage to control YouTube player
-    const currentlyPlaying = document.getElementById('moodreader-icon-pause').style.display !== 'none';
-    
-    if (currentlyPlaying) {
-      player.contentWindow.postMessage('{"event":"command","func":"pauseVideo","args":""}', '*');
-      updatePlayPauseIcon(false);
-    } else {
-      player.contentWindow.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
-      updatePlayPauseIcon(true);
+    try {
+      const currentlyPlaying = document.getElementById('moodreader-icon-pause')?.style.display !== 'none';
+      
+      if (currentlyPlaying) {
+        player.contentWindow.postMessage('{"event":"command","func":"pauseVideo","args":""}', '*');
+        updatePlayPauseIcon(false);
+      } else {
+        player.contentWindow.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
+        updatePlayPauseIcon(true);
+      }
+    } catch (e) {
+      console.warn('Error toggling playback:', e);
     }
   }
 
-  /**
-   * Update play/pause icon
-   */
   function updatePlayPauseIcon(isPlaying) {
-    const playIcon = document.getElementById('moodreader-icon-play');
-    const pauseIcon = document.getElementById('moodreader-icon-pause');
-    const miniPlayIcon = document.getElementById('moodreader-mini-icon-play');
-    const miniPauseIcon = document.getElementById('moodreader-mini-icon-pause');
+    const icons = {
+      play: document.getElementById('moodreader-icon-play'),
+      pause: document.getElementById('moodreader-icon-pause'),
+      miniPlay: document.getElementById('moodreader-mini-icon-play'),
+      miniPause: document.getElementById('moodreader-mini-icon-pause')
+    };
 
     if (isPlaying) {
-      playIcon.style.display = 'none';
-      pauseIcon.style.display = 'block';
-      miniPlayIcon.style.display = 'none';
-      miniPauseIcon.style.display = 'block';
+      if (icons.play) icons.play.style.display = 'none';
+      if (icons.pause) icons.pause.style.display = 'block';
+      if (icons.miniPlay) icons.miniPlay.style.display = 'none';
+      if (icons.miniPause) icons.miniPause.style.display = 'block';
     } else {
-      playIcon.style.display = 'block';
-      pauseIcon.style.display = 'none';
-      miniPlayIcon.style.display = 'block';
-      miniPauseIcon.style.display = 'none';
+      if (icons.play) icons.play.style.display = 'block';
+      if (icons.pause) icons.pause.style.display = 'none';
+      if (icons.miniPlay) icons.miniPlay.style.display = 'block';
+      if (icons.miniPause) icons.miniPause.style.display = 'none';
     }
   }
 
-  /**
-   * Skip to next song
-   */
   async function skipSong() {
     showLoading('Finding another track...');
     
     try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'SKIP_SONG'
-      });
+      const response = await chrome.runtime.sendMessage({ type: 'SKIP_SONG' });
 
       if (!response.success) {
         showError(response.error || 'Failed to skip');
@@ -581,24 +742,21 @@
     }
   }
 
-  /**
-   * Set volume
-   */
   function setVolume(volume) {
     currentVolume = volume;
-    if (player) {
-      player.contentWindow.postMessage(`{"event":"command","func":"setVolume","args":[${volume}]}`, '*');
+    if (player?.contentWindow) {
+      try {
+        player.contentWindow.postMessage(`{"event":"command","func":"setVolume","args":[${volume}]}`, '*');
+      } catch (e) {
+        console.warn('Error setting volume:', e);
+      }
     }
-    // Save to storage
     chrome.runtime.sendMessage({
       type: 'UPDATE_SETTINGS',
       settings: { volume: volume }
-    });
+    }).catch(() => {});
   }
 
-  /**
-   * Load stored volume
-   */
   async function loadStoredVolume() {
     try {
       const response = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
@@ -612,136 +770,173 @@
     }
   }
 
-  /**
-   * Stop music
-   */
   function stopMusic() {
+    if (player?.contentWindow) {
+      try {
+        player.contentWindow.postMessage('{"event":"command","func":"stopVideo","args":""}', '*');
+      } catch (e) {
+        console.warn('Error stopping video:', e);
+      }
+    }
     if (player) {
-      player.contentWindow.postMessage('{"event":"command","func":"stopVideo","args":""}', '*');
-      player.remove();
+      try {
+        player.remove();
+      } catch (e) {
+        console.warn('Error removing player:', e);
+      }
       player = null;
     }
     updatePlayPauseIcon(false);
   }
 
-  /**
-   * Minimize widget
-   */
+  // ============================================
+  // WIDGET STATE MANAGEMENT
+  // ============================================
+
   function minimizeWidget() {
     isMinimized = true;
-    document.getElementById('moodreader-container').style.display = 'none';
-    document.getElementById('moodreader-minimized').style.display = 'flex';
+    const container = document.getElementById('moodreader-container');
+    const minimized = document.getElementById('moodreader-minimized');
+    if (container) container.style.display = 'none';
+    if (minimized) minimized.style.display = 'flex';
   }
 
-  /**
-   * Expand widget
-   */
   function expandWidget() {
     isMinimized = false;
-    document.getElementById('moodreader-container').style.display = 'block';
-    document.getElementById('moodreader-minimized').style.display = 'none';
+    const container = document.getElementById('moodreader-container');
+    const minimized = document.getElementById('moodreader-minimized');
+    if (container) container.style.display = 'block';
+    if (minimized) minimized.style.display = 'none';
   }
 
-  /**
-   * Close widget
-   */
   function closeWidget() {
     stopMusic();
+    
+    // Cleanup drag listeners
+    if (dragCleanup) {
+      dragCleanup();
+      dragCleanup = null;
+    }
+    
     if (widget) {
       widget.remove();
       widget = null;
     }
-    chrome.runtime.sendMessage({ type: 'STOP_MUSIC' });
+    chrome.runtime.sendMessage({ type: 'STOP_MUSIC' }).catch(() => {});
   }
 
-  // UI Helper functions
+  // ============================================
+  // UI HELPERS
+  // ============================================
+
   function showLoading(message) {
-    document.getElementById('moodreader-loading').style.display = 'flex';
-    document.getElementById('moodreader-loading-text').textContent = message;
-    document.getElementById('moodreader-content').style.display = 'none';
+    const loading = document.getElementById('moodreader-loading');
+    const content = document.getElementById('moodreader-content');
+    if (loading) {
+      loading.style.display = 'flex';
+      safeSetText('moodreader-loading-text', message);
+    }
+    if (content) content.style.display = 'none';
   }
 
   function hideLoading() {
-    document.getElementById('moodreader-loading').style.display = 'none';
-    document.getElementById('moodreader-content').style.display = 'block';
+    const loading = document.getElementById('moodreader-loading');
+    const content = document.getElementById('moodreader-content');
+    if (loading) loading.style.display = 'none';
+    if (content) content.style.display = 'block';
   }
 
   function showError(message) {
     hideLoading();
-    document.getElementById('moodreader-error').style.display = 'block';
-    document.getElementById('moodreader-error-text').textContent = message;
+    const errorEl = document.getElementById('moodreader-error');
+    if (errorEl) {
+      errorEl.style.display = 'block';
+      safeSetText('moodreader-error-text', message);
+    }
   }
 
   function hideError() {
-    document.getElementById('moodreader-error').style.display = 'none';
+    const errorEl = document.getElementById('moodreader-error');
+    if (errorEl) errorEl.style.display = 'none';
   }
 
   function showPlayerControls() {
-    document.getElementById('moodreader-controls').style.display = 'flex';
+    const controls = document.getElementById('moodreader-controls');
+    if (controls) controls.style.display = 'flex';
   }
 
   function showMoodSection() {
-    document.getElementById('moodreader-mood-section').style.display = 'block';
+    const section = document.getElementById('moodreader-mood-section');
+    if (section) section.style.display = 'block';
   }
 
   function hideAnalyzeSection() {
-    document.getElementById('moodreader-analyze-section').style.display = 'none';
+    const section = document.getElementById('moodreader-analyze-section');
+    if (section) section.style.display = 'none';
   }
 
   function truncateText(text, maxLength) {
+    if (!text) return '';
     if (text.length <= maxLength) return text;
     return text.substring(0, maxLength - 3) + '...';
   }
 
-  /**
-   * Listen for messages from background script
-   */
+  // ============================================
+  // MESSAGE LISTENER
+  // ============================================
+
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    switch (message.type) {
-      case 'PLAY_MUSIC':
-        playMusic(message.data);
-        sendResponse({ success: true });
-        break;
+    try {
+      switch (message.type) {
+        case 'PLAY_MUSIC':
+          playMusic(message.data);
+          sendResponse({ success: true });
+          break;
 
-      case 'STOP_MUSIC':
-        stopMusic();
-        sendResponse({ success: true });
-        break;
+        case 'STOP_MUSIC':
+          stopMusic();
+          sendResponse({ success: true });
+          break;
 
-      case 'UPDATE_STATE':
-        if (message.state.isLoading) {
-          showLoading(message.state.loadingMessage || 'Loading...');
-        }
-        if (message.state.error) {
-          showError(message.state.error);
-        }
-        sendResponse({ success: true });
-        break;
+        case 'UPDATE_STATE':
+          if (message.state?.isLoading) {
+            showLoading(message.state.loadingMessage || 'Loading...');
+          }
+          if (message.state?.error) {
+            showError(message.state.error);
+          }
+          sendResponse({ success: true });
+          break;
 
-      case 'TOGGLE_WIDGET':
-        if (widget) {
-          if (isMinimized) expandWidget();
-          else minimizeWidget();
-        } else {
-          createWidget();
-        }
-        sendResponse({ success: true });
-        break;
+        case 'TOGGLE_WIDGET':
+          if (widget) {
+            if (isMinimized) expandWidget();
+            else minimizeWidget();
+          } else {
+            createWidget();
+          }
+          sendResponse({ success: true });
+          break;
+
+        default:
+          sendResponse({ success: false, error: 'Unknown message type' });
+      }
+    } catch (error) {
+      console.error('Message handler error:', error);
+      sendResponse({ success: false, error: error.message });
     }
     return true;
   });
 
-  /**
-   * Check if the page has enough readable content
-   */
+  // ============================================
+  // INITIALIZATION
+  // ============================================
+
   function hasReadableContent() {
     const text = extractArticleText();
-    return text.length >= 100; // Minimum 100 characters for meaningful analysis
+    return text.length >= TEXT_CONFIG.MIN_ARTICLE_LENGTH;
   }
 
-  /**
-   * Check if domain is excluded before initializing
-   */
   async function initialize() {
     try {
       const response = await chrome.runtime.sendMessage({
@@ -754,38 +949,32 @@
         return;
       }
 
-      // Create widget on page load
       createWidget();
 
-      // Check settings for auto-analyze
       const settingsResponse = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
       const settings = settingsResponse.settings || {};
 
-      // Auto-analyze if enabled and API key is set
       if (settings.autoAnalyze !== false && settings.apiKey) {
-        // Show loading state immediately
         showLoading('🎵 Detecting page mood...');
         
-        // Wait a bit for dynamic content to load
         setTimeout(() => {
           if (hasReadableContent()) {
             console.log('MoodReader: Auto-analyzing page...');
-            analyzePageMood(true); // Pass true for auto-analysis
+            analyzePageMood(true);
           } else {
             console.log('MoodReader: Not enough content for auto-analysis');
             hideLoading();
           }
-        }, 1000); // 1 second delay to allow dynamic content to load
+        }, TIMING.DYNAMIC_CONTENT_DELAY);
       }
     } catch (error) {
       console.error('MoodReader initialization error:', error);
     }
   }
 
-  // Initialize when DOM is ready and page is fully loaded
+  // Start initialization
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
-      // Wait for page to fully render
       if (document.readyState === 'complete') {
         initialize();
       } else {
