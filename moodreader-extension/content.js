@@ -387,6 +387,11 @@
     // Create YouTube iframe
     createYouTubePlayer(data.videoId);
     updatePlayPauseIcon(true);
+
+    // Auto-minimize widget after music starts (with small delay for smooth UX)
+    setTimeout(() => {
+      minimizeWidget();
+    }, 800);
   }
 
   /**
