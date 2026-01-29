@@ -4,7 +4,7 @@
  */
 
 import { analyzeSentiment, getFallbackMusicQuery, buildContext, generateAlternativeQuery } from './lib/gemini.js';
-import { searchYouTubeVideo, FALLBACK_VIDEOS } from './lib/youtube.js';
+import { searchYouTubeVideo, FALLBACK_VIDEOS, getRandomCuratedVideo } from './lib/youtube.js';
 
 // Default settings
 const DEFAULT_SETTINGS = {
@@ -155,10 +155,18 @@ async function handleManualMood(mood, tabId, context = {}) {
   try {
     // Get context-aware fallback query
     const moodData = getFallbackMusicQuery(mood, context);
-    const video = await searchYouTubeVideo(moodData.search_query);
     
-    const videoId = video?.videoId || FALLBACK_VIDEOS[mood] || FALLBACK_VIDEOS.focus;
-    const videoTitle = video?.title || `${moodData.mood_tag} Music`;
+    // Search for video, with curated fallback
+    let video = await searchYouTubeVideo(moodData.search_query);
+    
+    // If search failed, use curated video
+    if (!video || !video.videoId) {
+      console.log('Using curated video for mood:', mood);
+      video = getRandomCuratedVideo(mood);
+    }
+    
+    const videoId = video.videoId;
+    const videoTitle = video.title || `${moodData.mood_tag} Music`;
 
     currentState = {
       isPlaying: true,

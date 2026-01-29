@@ -463,23 +463,61 @@
     const wrapper = document.getElementById('moodreader-player-wrapper');
     const playerContainer = document.getElementById('moodreader-player');
 
-    // Build embed URL
-    const embedUrl = `https://www.youtube.com/embed/${videoId}?autoplay=1&enablejsapi=1&controls=0&rel=0&modestbranding=1&loop=1&playlist=${videoId}`;
+    // Remove existing player if any
+    if (player) {
+      player.remove();
+      player = null;
+    }
 
-    playerContainer.innerHTML = `
-      <iframe
-        id="moodreader-youtube-iframe"
-        width="1"
-        height="1"
-        src="${embedUrl}"
-        frameborder="0"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-        style="position: absolute; opacity: 0; pointer-events: none;"
-      ></iframe>
-    `;
+    // Build embed URL with all necessary params for autoplay
+    const params = new URLSearchParams({
+      autoplay: '1',
+      enablejsapi: '1',
+      controls: '0',
+      rel: '0',
+      modestbranding: '1',
+      loop: '1',
+      playlist: videoId,
+      mute: '0',
+      playsinline: '1',
+      origin: window.location.origin
+    });
+    
+    const embedUrl = `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
 
+    // Create iframe element
+    const iframe = document.createElement('iframe');
+    iframe.id = 'moodreader-youtube-iframe';
+    iframe.width = '280';
+    iframe.height = '158';
+    iframe.src = embedUrl;
+    iframe.frameBorder = '0';
+    iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+    iframe.style.cssText = 'position: absolute; opacity: 0; pointer-events: none; top: -9999px; left: -9999px;';
+    
+    // Handle iframe load errors
+    iframe.onerror = () => {
+      console.error('MoodReader: YouTube iframe failed to load');
+      showError('Failed to load music player. Please try again.');
+    };
+
+    // When iframe loads, ensure it's ready
+    iframe.onload = () => {
+      console.log('MoodReader: YouTube iframe loaded successfully');
+      // Try to ensure playback starts
+      setTimeout(() => {
+        if (player && player.contentWindow) {
+          player.contentWindow.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
+          // Set volume
+          player.contentWindow.postMessage(`{"event":"command","func":"setVolume","args":[${currentVolume}]}`, '*');
+        }
+      }, 1000);
+    };
+
+    playerContainer.innerHTML = '';
+    playerContainer.appendChild(iframe);
     wrapper.style.display = 'block';
-    player = document.getElementById('moodreader-youtube-iframe');
+    player = iframe;
   }
 
   /**
