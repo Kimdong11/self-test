@@ -3,7 +3,15 @@
  * Handles sentiment analysis and music query generation
  */
 
-const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+// Available Gemini models to try (in order of preference)
+const GEMINI_MODELS = [
+  'gemini-2.0-flash',
+  'gemini-1.5-flash-latest', 
+  'gemini-1.5-flash',
+  'gemini-pro'
+];
+
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 /**
  * System prompt for Gemini - Professional Music Supervisor persona
@@ -43,8 +51,6 @@ export async function analyzeSentiment(text, apiKey) {
     throw new Error('No text provided for analysis');
   }
 
-  const url = `${GEMINI_API_BASE}?key=${apiKey}`;
-
   const requestBody = {
     contents: [
       {
@@ -82,64 +88,92 @@ export async function analyzeSentiment(text, apiKey) {
     ]
   };
 
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(requestBody)
-    });
+  let lastError = null;
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(`Gemini API error: ${response.status} - ${errorData.error?.message || 'Unknown error'}`);
-    }
-
-    const data = await response.json();
+  // Try each model until one works
+  for (const model of GEMINI_MODELS) {
+    const url = `${GEMINI_API_BASE}/${model}:generateContent?key=${apiKey}`;
     
-    // Extract the text content from the response
-    const textContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    
-    if (!textContent) {
-      throw new Error('No content in Gemini response');
-    }
-
-    // Parse the JSON response
-    let result;
     try {
-      // Clean up the response in case it has markdown code blocks
-      let cleanedContent = textContent.trim();
-      if (cleanedContent.startsWith('```json')) {
-        cleanedContent = cleanedContent.slice(7);
-      }
-      if (cleanedContent.startsWith('```')) {
-        cleanedContent = cleanedContent.slice(3);
-      }
-      if (cleanedContent.endsWith('```')) {
-        cleanedContent = cleanedContent.slice(0, -3);
-      }
-      cleanedContent = cleanedContent.trim();
+      console.log(`Trying Gemini model: ${model}`);
       
-      result = JSON.parse(cleanedContent);
-    } catch (parseError) {
-      console.error('Failed to parse Gemini response:', textContent);
-      throw new Error('Invalid JSON response from Gemini');
-    }
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestBody)
+      });
 
-    // Validate the response structure
-    if (!result.mood_tag || !result.search_query) {
-      throw new Error('Incomplete response from Gemini');
-    }
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMsg = errorData.error?.message || 'Unknown error';
+        
+        // If model not found, try the next one
+        if (response.status === 404) {
+          console.warn(`Model ${model} not available, trying next...`);
+          lastError = new Error(`Model ${model} not found`);
+          continue;
+        }
+        
+        throw new Error(`Gemini API error: ${response.status} - ${errorMsg}`);
+      }
 
-    return {
-      mood_tag: result.mood_tag,
-      search_query: result.search_query
-    };
-  } catch (error) {
-    console.error('Gemini API call failed:', error);
-    throw error;
+      const data = await response.json();
+      
+      // Extract the text content from the response
+      const textContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      
+      if (!textContent) {
+        throw new Error('No content in Gemini response');
+      }
+
+      // Parse the JSON response
+      let result;
+      try {
+        // Clean up the response in case it has markdown code blocks
+        let cleanedContent = textContent.trim();
+        if (cleanedContent.startsWith('```json')) {
+          cleanedContent = cleanedContent.slice(7);
+        }
+        if (cleanedContent.startsWith('```')) {
+          cleanedContent = cleanedContent.slice(3);
+        }
+        if (cleanedContent.endsWith('```')) {
+          cleanedContent = cleanedContent.slice(0, -3);
+        }
+        cleanedContent = cleanedContent.trim();
+        
+        result = JSON.parse(cleanedContent);
+      } catch (parseError) {
+        console.error('Failed to parse Gemini response:', textContent);
+        throw new Error('Invalid JSON response from Gemini');
+      }
+
+      // Validate the response structure
+      if (!result.mood_tag || !result.search_query) {
+        throw new Error('Incomplete response from Gemini');
+      }
+
+      console.log(`Successfully used model: ${model}`);
+      return {
+        mood_tag: result.mood_tag,
+        search_query: result.search_query
+      };
+      
+    } catch (error) {
+      console.error(`Gemini API call failed with model ${model}:`, error);
+      lastError = error;
+      
+      // If it's not a 404, don't try other models
+      if (!error.message.includes('not found') && !error.message.includes('404')) {
+        throw error;
+      }
+    }
   }
+
+  // If all models failed
+  throw lastError || new Error('All Gemini models failed');
 }
 
 /**
