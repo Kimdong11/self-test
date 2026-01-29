@@ -233,9 +233,9 @@
    * Initialize widget event listeners
    */
   function initializeWidgetListeners() {
-    // Analyze button
-    document.getElementById('moodreader-analyze-btn')?.addEventListener('click', analyzePageMood);
-    document.getElementById('moodreader-retry-btn')?.addEventListener('click', analyzePageMood);
+    // Analyze button (manual analysis)
+    document.getElementById('moodreader-analyze-btn')?.addEventListener('click', () => analyzePageMood(false));
+    document.getElementById('moodreader-retry-btn')?.addEventListener('click', () => analyzePageMood(false));
 
     // Manual mood buttons
     document.querySelectorAll('.moodreader-mood-btn').forEach(btn => {
@@ -305,15 +305,22 @@
 
   /**
    * Analyze page mood
+   * @param {boolean} isAuto - Whether this is an automatic analysis
    */
-  async function analyzePageMood() {
-    showLoading('Reading the mood of the page...');
+  async function analyzePageMood(isAuto = false) {
+    showLoading(isAuto ? '🎵 Detecting page mood...' : 'Reading the mood of the page...');
     hideError();
 
     const text = extractArticleText();
     
     if (text.length < 50) {
-      showError('Not enough text content found on this page.');
+      if (isAuto) {
+        // For auto-analysis, just hide loading and show normal UI
+        hideLoading();
+        console.log('MoodReader: Not enough text for auto-analysis');
+      } else {
+        showError('Not enough text content found on this page.');
+      }
       return;
     }
 
@@ -324,10 +331,20 @@
       });
 
       if (!response.success) {
-        showError(response.error || 'Analysis failed');
+        if (isAuto && response.error?.includes('API key')) {
+          // For auto-analysis without API key, just show normal UI
+          hideLoading();
+        } else {
+          showError(response.error || 'Analysis failed');
+        }
       }
     } catch (error) {
-      showError(error.message || 'Failed to analyze page');
+      if (isAuto) {
+        hideLoading();
+        console.error('MoodReader auto-analysis error:', error);
+      } else {
+        showError(error.message || 'Failed to analyze page');
+      }
     }
   }
 
@@ -610,6 +627,14 @@
   });
 
   /**
+   * Check if the page has enough readable content
+   */
+  function hasReadableContent() {
+    const text = extractArticleText();
+    return text.length >= 100; // Minimum 100 characters for meaningful analysis
+  }
+
+  /**
    * Check if domain is excluded before initializing
    */
   async function initialize() {
@@ -626,14 +651,44 @@
 
       // Create widget on page load
       createWidget();
+
+      // Check settings for auto-analyze
+      const settingsResponse = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
+      const settings = settingsResponse.settings || {};
+
+      // Auto-analyze if enabled and API key is set
+      if (settings.autoAnalyze !== false && settings.apiKey) {
+        // Show loading state immediately
+        showLoading('🎵 Detecting page mood...');
+        
+        // Wait a bit for dynamic content to load
+        setTimeout(() => {
+          if (hasReadableContent()) {
+            console.log('MoodReader: Auto-analyzing page...');
+            analyzePageMood(true); // Pass true for auto-analysis
+          } else {
+            console.log('MoodReader: Not enough content for auto-analysis');
+            hideLoading();
+          }
+        }, 1000); // 1 second delay to allow dynamic content to load
+      }
     } catch (error) {
       console.error('MoodReader initialization error:', error);
     }
   }
 
-  // Initialize when DOM is ready
+  // Initialize when DOM is ready and page is fully loaded
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initialize);
+    document.addEventListener('DOMContentLoaded', () => {
+      // Wait for page to fully render
+      if (document.readyState === 'complete') {
+        initialize();
+      } else {
+        window.addEventListener('load', initialize);
+      }
+    });
+  } else if (document.readyState === 'interactive') {
+    window.addEventListener('load', initialize);
   } else {
     initialize();
   }

@@ -11,8 +11,8 @@ const DEFAULT_SETTINGS = {
   apiKey: '',
   volume: 50,
   enabled: true,
-  excludedDomains: ['youtube.com', 'netflix.com', 'spotify.com', 'music.youtube.com', 'soundcloud.com'],
-  autoAnalyze: false
+  excludedDomains: ['youtube.com', 'netflix.com', 'spotify.com', 'music.youtube.com', 'soundcloud.com', 'twitch.tv', 'vimeo.com', 'dailymotion.com'],
+  autoAnalyze: true  // Auto-analyze enabled by default
 };
 
 // Current state
