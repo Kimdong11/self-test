@@ -314,11 +314,18 @@
                 <rect x="15" y="4" width="4" height="16"></rect>
               </svg>
             </button>
-            <div class="moodreader-volume-wrapper">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <button class="moodreader-btn-control moodreader-btn-unmute" id="moodreader-unmute" title="Unmute (click if no sound)">
+              <svg id="moodreader-icon-muted" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                <line x1="23" y1="9" x2="17" y2="15"></line>
+                <line x1="17" y1="9" x2="23" y2="15"></line>
+              </svg>
+              <svg id="moodreader-icon-unmuted" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: none;">
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
                 <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
               </svg>
+            </button>
+            <div class="moodreader-volume-wrapper">
               <input type="range" id="moodreader-volume" class="moodreader-volume-slider" min="0" max="100" value="50">
             </div>
           </div>
@@ -429,6 +436,9 @@
           break;
         case 'moodreader-skip':
           skipSong();
+          break;
+        case 'moodreader-unmute':
+          manualUnmute();
           break;
         case 'moodreader-minimize':
           minimizeWidget();
@@ -738,11 +748,17 @@
   // YOUTUBE PLAYER
   // ============================================
 
+  let playerReady = false;
+  let unmuteAttempted = false;
+
   function createYouTubePlayer(videoId) {
     const wrapper = document.getElementById('moodreader-player-wrapper');
     const playerContainer = document.getElementById('moodreader-player');
 
-    if (!wrapper || !playerContainer) return;
+    if (!wrapper || !playerContainer) {
+      log.error('Player container not found');
+      return;
+    }
 
     // Remove existing player
     if (player) {
@@ -752,25 +768,33 @@
         console.warn('Error removing player:', e);
       }
       player = null;
+      playerReady = false;
+      unmuteAttempted = false;
     }
 
-    // Validate videoId format (security)
-    if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
-      console.error('Invalid video ID format');
-      showError('Invalid video ID');
-      return;
+    // Validate videoId format (security) - allow 10-12 characters
+    if (!videoId || !/^[a-zA-Z0-9_-]{10,12}$/.test(videoId)) {
+      log.error('Invalid video ID format', { videoId });
+      showError('Invalid video ID. Trying fallback...');
+      // Use fallback video
+      videoId = 'jfKfPfyJRdk'; // lofi hip hop radio
     }
 
+    log.info('Creating YouTube player', { videoId });
+
+    // Key fix: Start MUTED to allow autoplay, then unmute
     const params = new URLSearchParams({
       autoplay: '1',
+      mute: '1',              // Start muted to bypass autoplay restrictions
       enablejsapi: '1',
       controls: '0',
       rel: '0',
       modestbranding: '1',
       loop: '1',
       playlist: videoId,
-      mute: '0',
       playsinline: '1',
+      fs: '0',
+      iv_load_policy: '3',    // Hide annotations
       origin: window.location.origin
     });
     
@@ -778,53 +802,183 @@
 
     const iframe = document.createElement('iframe');
     iframe.id = 'moodreader-youtube-iframe';
-    iframe.width = '280';
-    iframe.height = '158';
+    iframe.width = '320';
+    iframe.height = '180';
     iframe.src = embedUrl;
     iframe.frameBorder = '0';
     iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
-    iframe.style.cssText = 'position: absolute; opacity: 0; pointer-events: none; top: -9999px; left: -9999px;';
+    
+    // Keep iframe visible but tiny (browsers may throttle completely hidden iframes)
+    iframe.style.cssText = `
+      position: fixed;
+      width: 1px;
+      height: 1px;
+      bottom: 0;
+      right: 0;
+      opacity: 0.01;
+      pointer-events: none;
+      z-index: -1;
+    `;
     
     iframe.onerror = () => {
-      console.error('MoodReader: YouTube iframe failed to load');
-      showError('Failed to load music player. Please try again.');
+      log.error('YouTube iframe failed to load');
+      showError('Failed to load music. Trying again...');
+      // Retry with fallback video
+      setTimeout(() => {
+        createYouTubePlayer('jfKfPfyJRdk');
+      }, 1000);
     };
 
     iframe.onload = () => {
-      console.log('MoodReader: YouTube iframe loaded successfully');
-      setTimeout(() => {
-        if (player?.contentWindow) {
-          try {
-            player.contentWindow.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
-            player.contentWindow.postMessage(`{"event":"command","func":"setVolume","args":[${currentVolume}]}`, '*');
-          } catch (e) {
-            console.warn('Error sending postMessage:', e);
-          }
-        }
-      }, TIMING.PLAYER_INIT_DELAY);
+      log.info('YouTube iframe loaded');
+      playerReady = true;
+      
+      // Start playback sequence
+      startPlaybackSequence();
     };
 
     playerContainer.innerHTML = '';
     playerContainer.appendChild(iframe);
     wrapper.style.display = 'block';
     player = iframe;
+
+    // Listen for YouTube API messages
+    setupYouTubeMessageListener();
+  }
+
+  /**
+   * Setup listener for YouTube iframe API messages
+   */
+  function setupYouTubeMessageListener() {
+    // Remove existing listener if any
+    window.removeEventListener('message', handleYouTubeMessage);
+    window.addEventListener('message', handleYouTubeMessage);
+  }
+
+  /**
+   * Handle messages from YouTube iframe
+   */
+  function handleYouTubeMessage(event) {
+    if (!event.origin.includes('youtube.com')) return;
+    
+    try {
+      const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+      
+      if (data.event === 'onStateChange') {
+        // -1: unstarted, 0: ended, 1: playing, 2: paused, 3: buffering, 5: video cued
+        if (data.info === 1) {
+          log.info('YouTube: Video is playing');
+          // Try to unmute after playback starts
+          if (!unmuteAttempted) {
+            unmuteAttempted = true;
+            setTimeout(attemptUnmute, 500);
+          }
+        } else if (data.info === 0) {
+          log.info('YouTube: Video ended, will loop');
+        } else if (data.info === -1 || data.info === 5) {
+          log.info('YouTube: Video cued, starting playback');
+          sendYouTubeCommand('playVideo');
+        }
+      } else if (data.event === 'onReady') {
+        log.info('YouTube: Player ready');
+        sendYouTubeCommand('playVideo');
+      } else if (data.event === 'onError') {
+        log.error('YouTube: Playback error', { error: data.info });
+        handlePlaybackError(data.info);
+      }
+    } catch (e) {
+      // Not a JSON message or not from YouTube
+    }
+  }
+
+  /**
+   * Start the playback sequence
+   */
+  function startPlaybackSequence() {
+    // Wait for iframe to be ready, then send commands
+    setTimeout(() => {
+      // First, listen for ready state
+      sendYouTubeCommand('addEventListener', ['onReady']);
+      sendYouTubeCommand('addEventListener', ['onStateChange']);
+      sendYouTubeCommand('addEventListener', ['onError']);
+      
+      // Then try to play
+      setTimeout(() => {
+        sendYouTubeCommand('playVideo');
+        sendYouTubeCommand('setVolume', [currentVolume]);
+      }, 500);
+      
+      // Attempt unmute after a delay
+      setTimeout(attemptUnmute, 1500);
+    }, TIMING.PLAYER_INIT_DELAY);
+  }
+
+  /**
+   * Attempt to unmute the video
+   */
+  function attemptUnmute() {
+    if (!player?.contentWindow) return;
+    
+    log.info('Attempting to unmute video');
+    sendYouTubeCommand('unMute');
+    sendYouTubeCommand('setVolume', [currentVolume]);
+    updateMuteIcon(false);
+  }
+
+  /**
+   * Send command to YouTube iframe
+   */
+  function sendYouTubeCommand(func, args = []) {
+    if (!player?.contentWindow) return;
+    
+    try {
+      const message = JSON.stringify({
+        event: 'command',
+        func: func,
+        args: args
+      });
+      player.contentWindow.postMessage(message, '*');
+    } catch (e) {
+      log.warn('Error sending YouTube command', { func, error: e.message });
+    }
+  }
+
+  /**
+   * Handle YouTube playback errors
+   */
+  function handlePlaybackError(errorCode) {
+    // 2: invalid video ID, 5: HTML5 player error, 100: video not found, 
+    // 101/150: video not embeddable
+    log.error('YouTube playback error', { errorCode });
+    
+    if (errorCode === 2 || errorCode === 100) {
+      showError('Video not found. Trying fallback...');
+    } else if (errorCode === 101 || errorCode === 150) {
+      showError('Video not embeddable. Trying fallback...');
+    } else {
+      showError('Playback error. Trying fallback...');
+    }
+    
+    // Retry with fallback video
+    setTimeout(() => {
+      createYouTubePlayer('jfKfPfyJRdk');
+    }, 1000);
   }
 
   function togglePlayPause() {
     if (!player?.contentWindow) return;
 
-    try {
-      const currentlyPlaying = document.getElementById('moodreader-icon-pause')?.style.display !== 'none';
-      
-      if (currentlyPlaying) {
-        player.contentWindow.postMessage('{"event":"command","func":"pauseVideo","args":""}', '*');
-        updatePlayPauseIcon(false);
-      } else {
-        player.contentWindow.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
-        updatePlayPauseIcon(true);
-      }
-    } catch (e) {
-      console.warn('Error toggling playback:', e);
+    const currentlyPlaying = document.getElementById('moodreader-icon-pause')?.style.display !== 'none';
+    
+    if (currentlyPlaying) {
+      sendYouTubeCommand('pauseVideo');
+      updatePlayPauseIcon(false);
+    } else {
+      sendYouTubeCommand('playVideo');
+      // Also attempt unmute when user manually plays
+      sendYouTubeCommand('unMute');
+      sendYouTubeCommand('setVolume', [currentVolume]);
+      updatePlayPauseIcon(true);
     }
   }
 
@@ -867,17 +1021,42 @@
 
   function setVolume(volume) {
     currentVolume = volume;
-    if (player?.contentWindow) {
-      try {
-        player.contentWindow.postMessage(`{"event":"command","func":"setVolume","args":[${volume}]}`, '*');
-      } catch (e) {
-        console.warn('Error setting volume:', e);
-      }
-    }
+    sendYouTubeCommand('unMute');
+    sendYouTubeCommand('setVolume', [volume]);
+    updateMuteIcon(false);
+    
     chrome.runtime.sendMessage({
       type: 'UPDATE_SETTINGS',
       settings: { volume: volume }
     }).catch(() => {});
+  }
+
+  /**
+   * Manual unmute - for when autoplay mute bypass fails
+   */
+  function manualUnmute() {
+    log.info('Manual unmute triggered by user');
+    sendYouTubeCommand('unMute');
+    sendYouTubeCommand('setVolume', [currentVolume]);
+    sendYouTubeCommand('playVideo');
+    updateMuteIcon(false);
+    updatePlayPauseIcon(true);
+  }
+
+  /**
+   * Update mute/unmute icon
+   */
+  function updateMuteIcon(isMuted) {
+    const mutedIcon = document.getElementById('moodreader-icon-muted');
+    const unmutedIcon = document.getElementById('moodreader-icon-unmuted');
+    
+    if (isMuted) {
+      if (mutedIcon) mutedIcon.style.display = 'block';
+      if (unmutedIcon) unmutedIcon.style.display = 'none';
+    } else {
+      if (mutedIcon) mutedIcon.style.display = 'none';
+      if (unmutedIcon) unmutedIcon.style.display = 'block';
+    }
   }
 
   async function loadStoredVolume() {
@@ -894,13 +1073,11 @@
   }
 
   function stopMusic() {
-    if (player?.contentWindow) {
-      try {
-        player.contentWindow.postMessage('{"event":"command","func":"stopVideo","args":""}', '*');
-      } catch (e) {
-        console.warn('Error stopping video:', e);
-      }
-    }
+    // Remove YouTube message listener
+    window.removeEventListener('message', handleYouTubeMessage);
+    
+    sendYouTubeCommand('stopVideo');
+    
     if (player) {
       try {
         player.remove();
@@ -908,6 +1085,8 @@
         console.warn('Error removing player:', e);
       }
       player = null;
+      playerReady = false;
+      unmuteAttempted = false;
     }
     updatePlayPauseIcon(false);
   }

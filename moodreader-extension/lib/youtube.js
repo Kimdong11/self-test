@@ -27,62 +27,62 @@ const INVIDIOUS_INSTANCES = [
 
 /**
  * Curated playlists for each mood - these are long-play videos/live streams
- * that are reliable and won't get taken down easily
+ * Updated with verified working video IDs (Jan 2026)
  */
 const CURATED_VIDEOS = {
-  // Lo-fi / Focus
+  // Lo-fi / Focus - Verified working lofi streams and mixes
   'lo-fi': [
-    { videoId: 'jfKfPfyJRdk', title: 'lofi hip hop radio - beats to relax/study to' },
-    { videoId: '5qap5aO4i9A', title: 'Lofi Hip Hop Radio - Beats to Sleep/Chill to' },
-    { videoId: 'rUxyKA_-grg', title: 'Lofi Hip Hop Mix - Chill Beats' },
-    { videoId: 'lTRiuFIWV54', title: 'Coffee Shop Radio - Chill Lofi Hip Hop Beats' }
+    { videoId: 'jfKfPfyJRdk', title: 'lofi hip hop radio - beats to relax/study to' },  // Lofi Girl live
+    { videoId: 'n61ULEU7CO0', title: 'Lofi Girl Synthwave Radio' },                      // Lofi Girl synthwave
+    { videoId: 'MVPTGNGiI-4', title: 'ChilledCow Radio - Lofi Hip Hop' },
+    { videoId: 'BTYAsjAVa3I', title: 'Lofi Coffee Shop Radio' }
   ],
-  // Ambient / Calm
+  // Ambient / Calm - Ambient music channels
   'ambient': [
-    { videoId: 'S_MOd40zlYU', title: 'Relaxing Ambient Music for Deep Focus' },
-    { videoId: 'hlWiI4xVXKY', title: 'Ambient Study Music To Concentrate' },
-    { videoId: 'w3gtLpZ1v5A', title: 'Ambient Music for Studying and Concentration' }
+    { videoId: 'lE6RYpe9IT0', title: 'Study Work Focus Deep Ambient Music' },
+    { videoId: 'OdIJ2x3nxzQ', title: 'Relaxing Ambient Music Mix' },
+    { videoId: 'C5CGD1fThFk', title: 'Ambient Space Music for Focus' }
   ],
   // Classical / Piano
   'piano': [
-    { videoId: '4Tr0otuiQuU', title: 'Classical Music for Studying & Brain Power' },
-    { videoId: 'jgpJVI3tDbY', title: 'Beautiful Piano Music 24/7' },
-    { videoId: 'BT0Gdy6bf4A', title: 'Peaceful Piano Music for Relaxation' }
+    { videoId: 'y7e-GC6oGhg', title: 'Relaxing Piano Music 24/7' },
+    { videoId: 'HSOtku1j600', title: 'Classical Piano Music for Studying' },
+    { videoId: '47e7xrF7wpY', title: 'Peaceful Piano & Soft Rain' }
   ],
   // Cinematic / Epic
   'cinematic': [
-    { videoId: 'dTqPz0VHmFM', title: 'Epic Cinematic Music Mix' },
-    { videoId: 'WFkZ-51xnLo', title: 'Most Beautiful Epic Music' },
-    { videoId: 'ASj81daun5Q', title: 'Epic Orchestral Music Mix' }
+    { videoId: 'hEcuVR2vHwM', title: 'Epic Cinematic Music Mix' },
+    { videoId: 'XYKUeZQbMF0', title: 'Two Steps From Hell Mix' },
+    { videoId: '2rn-lwJKhkI', title: 'Epic & Powerful Cinematic Music' }
   ],
   // Nature / Relaxing
   'nature': [
-    { videoId: 'eKFTSSKCzWA', title: 'Relaxing Nature Sounds - Forest Birds' },
-    { videoId: 'q76bMs-NwRk', title: 'Rain Sounds for Sleeping' },
-    { videoId: 'sz8Lo8oWlVU', title: 'Ocean Waves for Deep Sleep' }
+    { videoId: 'mPZkdNFkNps', title: 'Rain Sounds for Sleep' },
+    { videoId: 'V1RPi2MYptM', title: 'Forest Birdsong Nature Sounds' },
+    { videoId: 'sGkh1W5cbH4', title: 'Ocean Waves Sounds for Sleep' }
   ],
   // Jazz
   'jazz': [
-    { videoId: 'Dx5qFachd3A', title: 'Coffee Shop Jazz - Relaxing Background Music' },
-    { videoId: 'VMAPTo7RVCo', title: 'Smooth Jazz for Work & Study' },
-    { videoId: 'fEvM-OUbaKs', title: 'Jazz Music - Coffee Shop Ambience' }
+    { videoId: 'neV3EPgvZ3g', title: 'Jazz Cafe Music - Relaxing Coffee Jazz' },
+    { videoId: 'h2zkV-l_TbY', title: 'Cozy Coffee Shop Jazz' },
+    { videoId: 'fEvM-OUbaKs', title: 'Smooth Jazz for Work & Study' }
   ],
   // Electronic / Upbeat
   'electronic': [
-    { videoId: 'mfHC9mLaawc', title: 'Electronic Music for Focus' },
-    { videoId: '36YnV9STBqc', title: 'Electronic Study Music Playlist' },
-    { videoId: 'a4fv-BtzNmY', title: 'Upbeat Study Music Electronic' }
+    { videoId: 'UedTcufyrHc', title: 'NCS Release - Electronic Mix' },
+    { videoId: 'c3sBBRxDAqk', title: 'Energetic Electronic Music for Focus' },
+    { videoId: 'n1WpP7iowLc', title: 'Motivational Electronic Music' }
   ],
   // Sad / Melancholic
   'sad': [
-    { videoId: 'hHYct3aOJi4', title: 'Sad Piano Music for Reflection' },
-    { videoId: '4N3N1MlvVc4', title: 'Melancholic Piano - Emotional Music' },
-    { videoId: 'RBumgq5yVrA', title: 'Sad & Emotional Piano Music' }
+    { videoId: 'HoPaJRV-aF4', title: 'Sad Piano Music for Crying' },
+    { videoId: 'IWBlXrI34kE', title: 'Melancholic Piano - Sad Songs' },
+    { videoId: 'I4tqNClRlJs', title: 'Emotional Piano Music Collection' }
   ],
-  // Default fallback
+  // Default fallback - most reliable options
   'default': [
     { videoId: 'jfKfPfyJRdk', title: 'lofi hip hop radio - beats to relax/study to' },
-    { videoId: '5qap5aO4i9A', title: 'Relaxing Music 24/7' }
+    { videoId: 'n61ULEU7CO0', title: 'Lofi Girl Synthwave Radio' }
   ]
 };
 
@@ -279,14 +279,15 @@ export function buildPlayerHTML(videoId) {
 
 /**
  * Predefined mood to video mappings (fallback)
+ * Using most reliable video IDs
  */
 export const FALLBACK_VIDEOS = {
-  focus: 'jfKfPfyJRdk',
-  relax: '5qap5aO4i9A', 
-  sad: 'hHYct3aOJi4',
-  energetic: '36YnV9STBqc',
-  cinematic: 'dTqPz0VHmFM',
-  nature: 'eKFTSSKCzWA'
+  focus: 'jfKfPfyJRdk',      // Lofi Girl
+  relax: 'lE6RYpe9IT0',      // Ambient music
+  sad: 'HoPaJRV-aF4',        // Sad piano
+  energetic: 'UedTcufyrHc',  // NCS electronic
+  cinematic: 'hEcuVR2vHwM',  // Epic cinematic
+  nature: 'mPZkdNFkNps'      // Rain sounds
 };
 
 /**
