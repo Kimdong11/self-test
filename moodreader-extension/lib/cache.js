@@ -2,20 +2,28 @@
  * MoodReader Caching Module
  * Handles API response caching for better performance
  * 
- * Uses chrome.alarms for periodic cleanup (Service Worker compatible)
+ * Features:
+ * - Text-based analysis caching
+ * - Domain-based mood caching (for faster repeat visits)
+ * - Uses chrome.alarms for periodic cleanup (Service Worker compatible)
  */
 
 import { Logger } from './logger.js';
 
 const log = Logger.scope('Cache');
 
-// In-memory cache
+// In-memory cache for text analysis
 const memoryCache = new Map();
+
+// Domain-based mood cache
+const domainCache = new Map();
 
 // Cache configuration
 const CACHE_CONFIG = {
   maxSize: 50,
   defaultTTL: 30 * 60 * 1000, // 30 minutes
+  domainTTL: 60 * 60 * 1000,  // 1 hour for domain cache
+  domainMaxSize: 100,
   cleanupAlarmName: 'moodreader_cache_cleanup'
 };
 
@@ -171,5 +179,152 @@ export async function initializeCacheCleanup() {
 export function handleCacheAlarm(alarm) {
   if (alarm.name === CACHE_CONFIG.cleanupAlarmName) {
     cleanExpiredCache();
+    cleanExpiredDomainCache();
   }
+}
+
+// ============================================
+// DOMAIN-BASED CACHING
+// ============================================
+
+/**
+ * Extract domain from URL
+ * @param {string} url - Full URL
+ * @returns {string} - Domain name
+ */
+function extractDomain(url) {
+  try {
+    const { hostname } = new URL(url);
+    // Remove www. prefix
+    return hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Generate domain cache key
+ * @param {string} url - Page URL
+ * @param {string} siteCategory - Site category
+ * @returns {string} - Cache key
+ */
+function generateDomainKey(url, siteCategory = '') {
+  const domain = extractDomain(url);
+  return `domain_${domain}_${siteCategory}`;
+}
+
+/**
+ * Get cached mood for a domain
+ * @param {string} url - Page URL
+ * @param {string} siteCategory - Site category
+ * @returns {Object|null} - Cached mood data or null
+ */
+export function getDomainMood(url, siteCategory = '') {
+  const key = generateDomainKey(url, siteCategory);
+  
+  if (domainCache.has(key)) {
+    const cached = domainCache.get(key);
+    if (Date.now() < cached.expires) {
+      log.debug('Domain cache hit', { key });
+      // Update access count for frequency tracking
+      cached.accessCount = (cached.accessCount || 0) + 1;
+      return cached.data;
+    }
+    domainCache.delete(key);
+    log.debug('Domain cache expired', { key });
+  }
+  
+  return null;
+}
+
+/**
+ * Store mood data for a domain
+ * @param {string} url - Page URL
+ * @param {string} siteCategory - Site category
+ * @param {Object} moodData - Mood analysis result
+ * @param {number} ttl - Time to live in ms
+ */
+export function setDomainMood(url, siteCategory = '', moodData, ttl = CACHE_CONFIG.domainTTL) {
+  const key = generateDomainKey(url, siteCategory);
+  
+  domainCache.set(key, {
+    data: moodData,
+    expires: Date.now() + ttl,
+    created: Date.now(),
+    accessCount: 1
+  });
+  
+  // Enforce max size (LRU eviction)
+  if (domainCache.size > CACHE_CONFIG.domainMaxSize) {
+    // Find least accessed entry
+    let minAccess = Infinity;
+    let oldestKey = null;
+    
+    for (const [k, v] of domainCache) {
+      if (v.accessCount < minAccess) {
+        minAccess = v.accessCount;
+        oldestKey = k;
+      }
+    }
+    
+    if (oldestKey) {
+      domainCache.delete(oldestKey);
+      log.debug('Domain cache eviction (LRU)', { evicted: oldestKey });
+    }
+  }
+  
+  log.debug('Domain cache set', { key });
+}
+
+/**
+ * Clean expired domain cache entries
+ */
+export function cleanExpiredDomainCache() {
+  const now = Date.now();
+  const keysToDelete = [];
+  
+  for (const [key, value] of domainCache) {
+    if (now >= value.expires) {
+      keysToDelete.push(key);
+    }
+  }
+  
+  keysToDelete.forEach(key => domainCache.delete(key));
+  
+  if (keysToDelete.length > 0) {
+    log.info(`Cleaned ${keysToDelete.length} expired domain cache entries`);
+  }
+}
+
+/**
+ * Get domain cache statistics
+ * @returns {Object} - Domain cache stats
+ */
+export function getDomainCacheStats() {
+  let validCount = 0;
+  let expiredCount = 0;
+  const now = Date.now();
+  
+  for (const [, value] of domainCache) {
+    if (now < value.expires) {
+      validCount++;
+    } else {
+      expiredCount++;
+    }
+  }
+  
+  return {
+    total: domainCache.size,
+    valid: validCount,
+    expired: expiredCount
+  };
+}
+
+/**
+ * Clear domain cache
+ */
+export function clearDomainCache() {
+  const size = domainCache.size;
+  domainCache.clear();
+  log.info(`Domain cache cleared (${size} entries)`);
 }

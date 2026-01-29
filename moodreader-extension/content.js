@@ -17,9 +17,10 @@
   // CONSTANTS
   // ============================================
   const TIMING = {
-    DYNAMIC_CONTENT_DELAY: 1000,
-    AUTO_MINIMIZE_DELAY: 1200,
-    PLAYER_INIT_DELAY: 1000
+    DYNAMIC_CONTENT_DELAY: 500,     // Reduced for faster instant play
+    AUTO_MINIMIZE_DELAY: 800,       // Faster minimize
+    PLAYER_INIT_DELAY: 800,         // Faster player init
+    AI_TRANSITION_DELAY: 2000       // Delay before AI transition prompt
   };
 
   const TEXT_CONFIG = {
@@ -85,6 +86,8 @@
   let isMinimized = false;
   let currentVolume = 50;
   let dragCleanup = null; // For cleaning up drag event listeners
+  let pendingAIRefinement = null; // Stores AI refinement data for user acceptance
+  let isInstantPlayback = false; // Track if current playback is instant mode
 
   // ============================================
   // CONTEXT BUILDING
@@ -580,6 +583,10 @@
     hideAnalyzeSection();
     showPlayerControls();
     showMoodSection();
+    hideAIRefinementBanner();
+
+    // Track instant playback mode
+    isInstantPlayback = data.isInstant || false;
 
     // Safely update text content (XSS-safe)
     safeSetText('moodreader-mood-tag', data.mood || '--');
@@ -612,6 +619,14 @@
         detailsEl.appendChild(genreSpan);
       }
       
+      // Show instant indicator if in instant mode with AI loading
+      if (data.isInstant && data.loadingAI) {
+        const instantSpan = createSafeElement('span', '⚡ Quick', 'moodreader-instant-badge');
+        instantSpan.title = 'Quick play mode - AI analysis in progress';
+        detailsEl.appendChild(document.createTextNode(' '));
+        detailsEl.appendChild(instantSpan);
+      }
+      
       detailsEl.style.display = 'flex';
     }
 
@@ -621,6 +636,102 @@
 
     // Auto-minimize
     setTimeout(minimizeWidget, TIMING.AUTO_MINIMIZE_DELAY);
+  }
+
+  /**
+   * Show AI refinement banner for mood transition
+   */
+  function showAIRefinementBanner(data) {
+    pendingAIRefinement = data;
+    
+    let banner = document.getElementById('moodreader-ai-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'moodreader-ai-banner';
+      banner.className = 'moodreader-ai-banner';
+      
+      const container = document.getElementById('moodreader-content');
+      if (container) {
+        container.insertBefore(banner, container.firstChild);
+      }
+    }
+
+    // Build banner content safely
+    banner.innerHTML = '';
+    
+    const textSpan = createSafeElement('span', `🎯 AI suggests: "${data.mood}"`, 'moodreader-ai-text');
+    banner.appendChild(textSpan);
+    
+    const btnContainer = document.createElement('div');
+    btnContainer.className = 'moodreader-ai-btns';
+    
+    const acceptBtn = document.createElement('button');
+    acceptBtn.className = 'moodreader-btn-small moodreader-btn-accept';
+    acceptBtn.textContent = 'Switch';
+    acceptBtn.onclick = () => applyAIRefinement();
+    
+    const dismissBtn = document.createElement('button');
+    dismissBtn.className = 'moodreader-btn-small moodreader-btn-dismiss';
+    dismissBtn.textContent = '✕';
+    dismissBtn.onclick = () => hideAIRefinementBanner();
+    
+    btnContainer.appendChild(acceptBtn);
+    btnContainer.appendChild(dismissBtn);
+    banner.appendChild(btnContainer);
+    
+    banner.style.display = 'flex';
+    log.info('AI refinement available', { newMood: data.mood });
+  }
+
+  /**
+   * Hide AI refinement banner
+   */
+  function hideAIRefinementBanner() {
+    const banner = document.getElementById('moodreader-ai-banner');
+    if (banner) {
+      banner.style.display = 'none';
+    }
+    pendingAIRefinement = null;
+  }
+
+  /**
+   * Apply pending AI refinement
+   */
+  function applyAIRefinement() {
+    if (!pendingAIRefinement) return;
+    
+    log.info('Applying AI refinement', { mood: pendingAIRefinement.mood });
+    playMusic(pendingAIRefinement);
+    hideAIRefinementBanner();
+  }
+
+  /**
+   * Update mood display when AI confirms instant choice
+   */
+  function handleAIConfirmed(data) {
+    // Remove instant badge if present
+    const instantBadge = document.querySelector('.moodreader-instant-badge');
+    if (instantBadge) {
+      instantBadge.remove();
+    }
+    
+    // Add confirmed badge briefly
+    const detailsEl = document.getElementById('moodreader-mood-details');
+    if (detailsEl) {
+      const confirmedSpan = createSafeElement('span', '✓ AI confirmed', 'moodreader-confirmed-badge');
+      detailsEl.appendChild(document.createTextNode(' '));
+      detailsEl.appendChild(confirmedSpan);
+      
+      // Remove after a few seconds
+      setTimeout(() => {
+        if (confirmedSpan.parentNode) {
+          confirmedSpan.remove();
+        }
+      }, 3000);
+    }
+    
+    isInstantPlayback = false;
+    log.info('AI confirmed instant mood selection');
   }
 
   // ============================================
@@ -907,6 +1018,7 @@
 
         case 'STOP_MUSIC':
           stopMusic();
+          hideAIRefinementBanner();
           sendResponse({ success: true });
           break;
 
@@ -927,6 +1039,18 @@
           } else {
             createWidget();
           }
+          sendResponse({ success: true });
+          break;
+
+        case 'AI_REFINEMENT':
+          // AI has a different/better mood suggestion
+          showAIRefinementBanner(message.data);
+          sendResponse({ success: true });
+          break;
+
+        case 'AI_CONFIRMED':
+          // AI confirms the instant mood selection was correct
+          handleAIConfirmed(message.data);
           sendResponse({ success: true });
           break;
 

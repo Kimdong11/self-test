@@ -2,16 +2,26 @@
  * MoodReader Background Service Worker
  * Handles API calls, state management, and message routing
  * 
+ * Features:
+ * - Instant playback mode (plays immediately, refines with AI)
+ * - Domain-based caching for faster repeat visits
+ * - Parallel processing of AI analysis and music playback
+ * 
  * Security: API key encoding, input validation
- * Performance: Response caching with chrome.alarms cleanup
+ * Performance: Response caching, instant playback, chrome.alarms cleanup
  */
 
 import { analyzeSentiment, getFallbackMusicQuery, generateAlternativeQuery } from './lib/gemini.js';
 import { searchYouTubeVideo, FALLBACK_VIDEOS, getRandomCuratedVideo } from './lib/youtube.js';
-import { getCachedAnalysis, setCachedAnalysis, clearCache, initializeCacheCleanup, handleCacheAlarm } from './lib/cache.js';
+import { 
+  getCachedAnalysis, setCachedAnalysis, clearCache, 
+  initializeCacheCleanup, handleCacheAlarm,
+  getDomainMood, setDomainMood, clearDomainCache
+} from './lib/cache.js';
 import { encodeApiKey, decodeApiKey, isValidApiKeyFormat, sanitizeObject, sanitizeDomain } from './lib/security.js';
 import { DEFAULT_SETTINGS, ERROR_CODES } from './lib/constants.js';
 import { Logger } from './lib/logger.js';
+import { getInstantPlaybackData, quickMoodDetection, shouldRefineWithAI, mergeWithAIResult } from './lib/instant-play.js';
 
 const log = Logger.scope('Background');
 
@@ -99,20 +109,22 @@ async function isDomainExcluded(url) {
 }
 
 // ============================================
-// ANALYSIS HANDLERS
+// ANALYSIS HANDLERS (with Instant Playback Mode)
 // ============================================
 
+/**
+ * Handle analyze request with instant playback mode
+ * Flow:
+ * 1. Check domain cache for instant result
+ * 2. If no cache, use quick mood detection and play immediately
+ * 3. In parallel, run AI analysis for refinement
+ * 4. If AI produces better result, smoothly transition
+ */
 async function handleAnalyzeRequest(text, tabId, context = {}) {
   const settings = await getSettings();
+  const instantPlayEnabled = settings.instantPlayEnabled !== false; // Default to true
   
-  if (!settings.apiKey) {
-    return { 
-      success: false, 
-      error: 'API key not configured. Please set your Gemini API key in the extension settings.',
-      code: ERROR_CODES.API_KEY_MISSING
-    };
-  }
-
+  // Validate text
   if (!text || typeof text !== 'string' || text.trim().length < 50) {
     return {
       success: false,
@@ -122,58 +134,96 @@ async function handleAnalyzeRequest(text, tabId, context = {}) {
   }
 
   try {
+    // === PHASE 1: Check for cached results (fastest path) ===
+    
+    // Check domain cache first
+    const domainMood = getDomainMood(context.url, context.siteCategory);
+    if (domainMood) {
+      log.info('Domain cache hit - instant playback');
+      return await playWithMoodData(domainMood, tabId, context, text);
+    }
+    
+    // Check text-based cache
+    const cachedResult = getCachedAnalysis(text);
+    if (cachedResult) {
+      log.info('Text cache hit - instant playback');
+      // Also cache by domain for future
+      if (context.url) {
+        setDomainMood(context.url, context.siteCategory, cachedResult);
+      }
+      return await playWithMoodData(cachedResult, tabId, context, text);
+    }
+
+    // === PHASE 2: Instant Playback Mode ===
+    
+    if (instantPlayEnabled) {
+      // Start with instant playback (no API wait)
+      const instantData = getInstantPlaybackData(context, text);
+      
+      // Send instant playback to content script
+      chrome.tabs.sendMessage(tabId, {
+        type: 'PLAY_MUSIC',
+        data: {
+          ...instantData,
+          isInstant: true,
+          loadingAI: !!settings.apiKey
+        }
+      }).catch(() => {});
+
+      // Update state with instant data
+      currentState = {
+        isPlaying: true,
+        currentMood: instantData.mood,
+        currentQuery: instantData.moodData?.search_query || '',
+        currentVideoId: instantData.videoId,
+        currentVideoTitle: instantData.videoTitle,
+        moodData: instantData.moodData,
+        context: context,
+        skipCount: 0,
+        isInstant: true
+      };
+
+      await chrome.storage.local.set({ currentState });
+      
+      log.info('Instant playback started', { mood: instantData.mood });
+
+      // === PHASE 3: AI Refinement (parallel, non-blocking) ===
+      
+      if (settings.apiKey && shouldRefineWithAI({ confidence: 0.5 }, text.length)) {
+        // Run AI analysis in background (don't await)
+        refineWithAI(text, settings.apiKey, context, tabId, instantData).catch(err => {
+          log.warn('AI refinement failed (non-critical)', { error: err.message });
+        });
+      }
+
+      return { success: true, data: currentState, instant: true };
+    }
+
+    // === FALLBACK: Traditional flow (no instant play) ===
+    
+    if (!settings.apiKey) {
+      return { 
+        success: false, 
+        error: 'API key not configured. Please set your Gemini API key in the extension settings.',
+        code: ERROR_CODES.API_KEY_MISSING
+      };
+    }
+
     chrome.tabs.sendMessage(tabId, { 
       type: 'UPDATE_STATE', 
       state: { isLoading: true, loadingMessage: '🎵 Analyzing mood & context...' } 
     }).catch(() => {});
 
-    // Check cache first
-    let result = getCachedAnalysis(text);
+    const result = await analyzeSentiment(text, settings.apiKey, context);
+    const sanitizedResult = sanitizeObject(result);
+    setCachedAnalysis(text, sanitizedResult);
     
-    if (!result) {
-      log.info('Cache miss, calling Gemini API');
-      result = await analyzeSentiment(text, settings.apiKey, context);
-      result = sanitizeObject(result);
-      setCachedAnalysis(text, result);
-    } else {
-      log.info('Using cached analysis result');
-    }
-    
-    const video = await searchYouTubeVideo(result.search_query);
-    
-    if (!video) {
-      throw new Error('Could not find a matching video');
+    if (context.url) {
+      setDomainMood(context.url, context.siteCategory, sanitizedResult);
     }
 
-    currentState = {
-      isPlaying: true,
-      currentMood: result.mood_tag,
-      currentQuery: result.search_query,
-      currentVideoId: video.videoId,
-      currentVideoTitle: video.title,
-      moodData: result,
-      context: context,
-      skipCount: 0
-    };
+    return await playWithMoodData(sanitizedResult, tabId, context, text);
 
-    await chrome.storage.local.set({ currentState });
-
-    chrome.tabs.sendMessage(tabId, {
-      type: 'PLAY_MUSIC',
-      data: {
-        mood: result.mood_tag,
-        query: result.search_query,
-        videoId: video.videoId,
-        videoTitle: video.title,
-        energy: result.energy,
-        valence: result.valence,
-        tempo: result.tempo,
-        genres: result.genres
-      }
-    }).catch(() => {});
-
-    log.info('Analysis complete', { mood: result.mood_tag });
-    return { success: true, data: currentState };
   } catch (error) {
     log.error('Analysis failed', error);
     
@@ -187,6 +237,123 @@ async function handleAnalyzeRequest(text, tabId, context = {}) {
       error: error.message,
       code: ERROR_CODES.API_ERROR
     };
+  }
+}
+
+/**
+ * Play music with mood data
+ */
+async function playWithMoodData(moodData, tabId, context, text) {
+  const video = await searchYouTubeVideo(moodData.search_query);
+  
+  if (!video) {
+    throw new Error('Could not find a matching video');
+  }
+
+  currentState = {
+    isPlaying: true,
+    currentMood: moodData.mood_tag,
+    currentQuery: moodData.search_query,
+    currentVideoId: video.videoId,
+    currentVideoTitle: video.title,
+    moodData: moodData,
+    context: context,
+    skipCount: 0
+  };
+
+  await chrome.storage.local.set({ currentState });
+
+  chrome.tabs.sendMessage(tabId, {
+    type: 'PLAY_MUSIC',
+    data: {
+      mood: moodData.mood_tag,
+      query: moodData.search_query,
+      videoId: video.videoId,
+      videoTitle: video.title,
+      energy: moodData.energy,
+      valence: moodData.valence,
+      tempo: moodData.tempo,
+      genres: moodData.genres
+    }
+  }).catch(() => {});
+
+  log.info('Playing with mood data', { mood: moodData.mood_tag });
+  return { success: true, data: currentState };
+}
+
+/**
+ * Refine instant playback with AI analysis (runs in background)
+ */
+async function refineWithAI(text, apiKey, context, tabId, instantData) {
+  try {
+    log.info('Starting AI refinement in background');
+    
+    const result = await analyzeSentiment(text, apiKey, context);
+    const sanitizedResult = sanitizeObject(result);
+    
+    // Cache results
+    setCachedAnalysis(text, sanitizedResult);
+    if (context.url) {
+      setDomainMood(context.url, context.siteCategory, sanitizedResult);
+    }
+
+    // Check if AI result is significantly different
+    const instantMood = instantData.mood?.toLowerCase() || '';
+    const aiMood = sanitizedResult.mood_tag?.toLowerCase() || '';
+    
+    // Only update if mood is different or energy/valence differ significantly
+    const moodDifferent = !aiMood.includes(instantMood) && !instantMood.includes(aiMood);
+    const energyDifferent = Math.abs((sanitizedResult.energy || 0.5) - (instantData.energy || 0.5)) > 0.3;
+    
+    if (moodDifferent || energyDifferent) {
+      log.info('AI detected different mood, searching for better music', { 
+        instant: instantMood, 
+        ai: aiMood 
+      });
+      
+      // Search for AI-recommended music
+      const video = await searchYouTubeVideo(sanitizedResult.search_query);
+      
+      if (video) {
+        // Update state
+        currentState = {
+          ...currentState,
+          currentMood: sanitizedResult.mood_tag,
+          currentQuery: sanitizedResult.search_query,
+          moodData: sanitizedResult,
+          isInstant: false,
+          aiRefined: true
+        };
+        
+        // Notify content script about AI refinement (smooth transition)
+        chrome.tabs.sendMessage(tabId, {
+          type: 'AI_REFINEMENT',
+          data: {
+            mood: sanitizedResult.mood_tag,
+            query: sanitizedResult.search_query,
+            videoId: video.videoId,
+            videoTitle: video.title,
+            energy: sanitizedResult.energy,
+            valence: sanitizedResult.valence,
+            tempo: sanitizedResult.tempo,
+            genres: sanitizedResult.genres
+          }
+        }).catch(() => {});
+        
+        log.info('AI refinement complete - transition available');
+      }
+    } else {
+      log.info('AI confirms instant mood - no change needed');
+      
+      // Still notify that AI analysis is complete
+      chrome.tabs.sendMessage(tabId, {
+        type: 'AI_CONFIRMED',
+        data: { mood: sanitizedResult.mood_tag }
+      }).catch(() => {});
+    }
+    
+  } catch (error) {
+    log.error('AI refinement error', error);
   }
 }
 
@@ -379,7 +546,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         case 'CLEAR_CACHE': {
           clearCache();
-          sendResponse({ success: true });
+          clearDomainCache();
+          sendResponse({ success: true, message: 'All caches cleared' });
+          break;
+        }
+
+        case 'INSTANT_PLAY': {
+          // Direct instant play request (from popup or manual trigger)
+          const instantData = getInstantPlaybackData(message.context || {}, message.text || '');
+          const video = instantData.videoId ? instantData : await searchYouTubeVideo(instantData.moodData?.search_query || 'ambient music');
+          
+          currentState = {
+            isPlaying: true,
+            currentMood: instantData.mood,
+            currentQuery: instantData.moodData?.search_query || '',
+            currentVideoId: video.videoId,
+            currentVideoTitle: video.videoTitle || video.title,
+            moodData: instantData.moodData,
+            context: message.context || {},
+            skipCount: 0,
+            isInstant: true
+          };
+
+          await chrome.storage.local.set({ currentState });
+
+          if (tabId || message.tabId) {
+            chrome.tabs.sendMessage(tabId || message.tabId, {
+              type: 'PLAY_MUSIC',
+              data: instantData
+            }).catch(() => {});
+          }
+          
+          sendResponse({ success: true, data: currentState });
           break;
         }
 

@@ -5,11 +5,13 @@
 
 // Timing constants (in milliseconds)
 export const TIMING = {
-  DYNAMIC_CONTENT_DELAY: 1000,
-  AUTO_MINIMIZE_DELAY: 1200,
-  PLAYER_INIT_DELAY: 1000,
-  API_TIMEOUT: 5000,
-  RETRY_DELAY: 500
+  DYNAMIC_CONTENT_DELAY: 500,     // Reduced for faster instant play
+  AUTO_MINIMIZE_DELAY: 800,       // Faster minimize after playback
+  PLAYER_INIT_DELAY: 800,         // Faster player init
+  API_TIMEOUT: 15000,             // 15 seconds for API calls
+  RETRY_DELAY: 500,
+  AI_REFINEMENT_DELAY: 2000,      // Delay before showing AI refinement option
+  INSTANT_PLAY_TIMEOUT: 100       // Near-instant playback start
 };
 
 // Text extraction configuration
@@ -46,7 +48,10 @@ export const DEFAULT_SETTINGS = {
     'disneyplus.com'
   ],
   autoAnalyze: true,
+  instantPlayEnabled: true,     // Enable instant playback mode (plays immediately, AI refines)
+  showAIRefinement: true,       // Show AI refinement suggestions
   cacheEnabled: true,
+  domainCacheEnabled: true,     // Enable domain-based caching for faster repeat visits
   cacheDuration: 30 * 60 * 1000 // 30 minutes
 };
 

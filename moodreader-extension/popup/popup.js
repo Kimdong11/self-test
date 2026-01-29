@@ -36,6 +36,10 @@ async function loadSettings() {
       const autoAnalyze = document.getElementById('auto-analyze');
       if (autoAnalyze) autoAnalyze.checked = settings.autoAnalyze !== false;
 
+      // Instant Play Mode
+      const instantPlay = document.getElementById('instant-play');
+      if (instantPlay) instantPlay.checked = settings.instantPlayEnabled !== false;
+
       // Excluded domains
       renderExcludedDomains(settings.excludedDomains || []);
     }
@@ -138,6 +142,11 @@ function initializeEventListeners() {
   // Auto-analyze toggle
   document.getElementById('auto-analyze').addEventListener('change', (e) => {
     saveSettings({ autoAnalyze: e.target.checked });
+  });
+
+  // Instant Play toggle
+  document.getElementById('instant-play').addEventListener('change', (e) => {
+    saveSettings({ instantPlayEnabled: e.target.checked });
   });
 
   // Add domain button

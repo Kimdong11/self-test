@@ -376,6 +376,13 @@ body {
   transform: translateX(20px);
 }
 
+.setting-hint {
+  font-size: 10px;
+  color: #666;
+  margin-top: 6px;
+  margin-left: 2px;
+}
+
 /* Excluded Domains List */
 .excluded-list {
   display: flex;
