@@ -11,8 +11,50 @@
   window.__moodReaderInitialized = true;
 
   // Configuration
-  const MAX_TEXT_LENGTH = 1000;
+  const MAX_TEXT_LENGTH = 1500; // Increased for better analysis
   const EXCLUDED_TAGS = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'SVG', 'NAV', 'HEADER', 'FOOTER', 'ASIDE'];
+
+  /**
+   * Build context for enhanced analysis
+   */
+  function buildContext() {
+    const hour = new Date().getHours();
+    let timeOfDay;
+    if (hour >= 5 && hour < 12) timeOfDay = 'morning';
+    else if (hour >= 12 && hour < 17) timeOfDay = 'afternoon';
+    else if (hour >= 17 && hour < 21) timeOfDay = 'evening';
+    else timeOfDay = 'night';
+
+    const url = window.location.href.toLowerCase();
+    const title = document.title.toLowerCase();
+    const combined = url + ' ' + title;
+
+    let siteCategory = 'other';
+    if (/news|times|post|herald|reuters|cnn|bbc/i.test(combined)) siteCategory = 'news';
+    else if (/tech|developer|programming|github|stackoverflow|verge|wired/i.test(combined)) siteCategory = 'tech';
+    else if (/research|academic|journal|\.edu|arxiv|scholar/i.test(combined)) siteCategory = 'academic';
+    else if (/lifestyle|food|travel|fashion|health|wellness/i.test(combined)) siteCategory = 'lifestyle';
+    else if (/blog|medium\.com|substack|wordpress/i.test(combined)) siteCategory = 'blog';
+
+    const text = extractArticleText();
+    let articleLength;
+    if (text.length < 500) articleLength = 'short';
+    else if (text.length < 1500) articleLength = 'medium';
+    else articleLength = 'long';
+
+    // Detect language
+    const koreanRegex = /[\uAC00-\uD7AF]/;
+    const language = koreanRegex.test(text) ? 'ko' : 'en';
+
+    return {
+      timeOfDay,
+      siteCategory,
+      articleLength,
+      language,
+      url: window.location.href,
+      title: document.title
+    };
+  }
 
   // Widget state
   let widget = null;
@@ -133,6 +175,7 @@
           <!-- Mood Display -->
           <div class="moodreader-mood" id="moodreader-mood-section" style="display: none;">
             <div class="moodreader-mood-tag" id="moodreader-mood-tag">--</div>
+            <div class="moodreader-mood-details" id="moodreader-mood-details"></div>
             <div class="moodreader-video-title" id="moodreader-video-title">No music playing</div>
           </div>
 
@@ -308,7 +351,8 @@
    * @param {boolean} isAuto - Whether this is an automatic analysis
    */
   async function analyzePageMood(isAuto = false) {
-    showLoading(isAuto ? '🎵 Detecting page mood...' : 'Reading the mood of the page...');
+    const context = buildContext();
+    showLoading(isAuto ? `🎵 Analyzing ${context.siteCategory} content...` : 'Reading the mood of the page...');
     hideError();
 
     const text = extractArticleText();
@@ -325,9 +369,12 @@
     }
 
     try {
+      console.log('MoodReader: Analyzing with context:', context);
+      
       const response = await chrome.runtime.sendMessage({
         type: 'ANALYZE_TEXT',
-        text: text
+        text: text,
+        context: context
       });
 
       if (!response.success) {
@@ -352,13 +399,15 @@
    * Select manual mood
    */
   async function selectManualMood(mood) {
+    const context = buildContext();
     showLoading(`Setting ${mood} mood...`);
     hideError();
 
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'MANUAL_MOOD',
-        mood: mood
+        mood: mood,
+        context: context
       });
 
       if (!response.success) {
@@ -384,6 +433,19 @@
     document.getElementById('moodreader-mini-mood').textContent = data.mood;
     document.getElementById('moodreader-video-title').textContent = truncateText(data.videoTitle, 40);
 
+    // Show enhanced mood details if available
+    const detailsEl = document.getElementById('moodreader-mood-details');
+    if (detailsEl && (data.energy !== undefined || data.genres)) {
+      const energyBar = data.energy !== undefined 
+        ? `<span class="moodreader-energy" title="Energy: ${Math.round(data.energy * 100)}%">⚡${Math.round(data.energy * 100)}%</span>` 
+        : '';
+      const tempoText = data.tempo ? `<span class="moodreader-tempo" title="Tempo">${data.tempo}</span>` : '';
+      const genreText = data.genres?.length ? `<span class="moodreader-genres">${data.genres.slice(0, 2).join(' · ')}</span>` : '';
+      
+      detailsEl.innerHTML = [energyBar, tempoText, genreText].filter(Boolean).join(' ');
+      detailsEl.style.display = 'flex';
+    }
+
     // Create YouTube iframe
     createYouTubePlayer(data.videoId);
     updatePlayPauseIcon(true);
@@ -391,7 +453,7 @@
     // Auto-minimize widget after music starts (with small delay for smooth UX)
     setTimeout(() => {
       minimizeWidget();
-    }, 800);
+    }, 1200);
   }
 
   /**

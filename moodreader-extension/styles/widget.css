@@ -140,6 +140,35 @@
   margin-bottom: 8px;
 }
 
+.moodreader-mood-details {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 8px 0;
+  font-size: 11px;
+}
+
+.moodreader-energy {
+  background: rgba(251, 191, 36, 0.2);
+  color: #fbbf24;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.moodreader-tempo {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: capitalize;
+}
+
+.moodreader-genres {
+  color: #9ca3af;
+  font-style: italic;
+}
+
 .moodreader-video-title {
   font-size: 12px;
   color: #a0a0a0;

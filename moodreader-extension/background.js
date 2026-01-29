@@ -3,7 +3,7 @@
  * Handles API calls, state management, and message routing
  */
 
-import { analyzeSentiment, getFallbackMusicQuery } from './lib/gemini.js';
+import { analyzeSentiment, getFallbackMusicQuery, buildContext, generateAlternativeQuery } from './lib/gemini.js';
 import { searchYouTubeVideo, FALLBACK_VIDEOS } from './lib/youtube.js';
 
 // Default settings
@@ -21,7 +21,11 @@ let currentState = {
   currentMood: null,
   currentQuery: null,
   currentVideoId: null,
-  currentVideoTitle: null
+  currentVideoTitle: null,
+  // Enhanced mood data
+  moodData: null,
+  context: null,
+  skipCount: 0
 };
 
 /**
@@ -70,7 +74,7 @@ async function isDomainExcluded(url) {
 /**
  * Handle analyze request from content script or popup
  */
-async function handleAnalyzeRequest(text, tabId) {
+async function handleAnalyzeRequest(text, tabId, context = {}) {
   const settings = await getSettings();
   
   if (!settings.apiKey) {
@@ -84,11 +88,13 @@ async function handleAnalyzeRequest(text, tabId) {
     // Send loading state to content script
     chrome.tabs.sendMessage(tabId, { 
       type: 'UPDATE_STATE', 
-      state: { isLoading: true, loadingMessage: 'Reading the mood of the page...' } 
+      state: { isLoading: true, loadingMessage: '🎵 Analyzing mood & context...' } 
     }).catch(() => {});
 
-    // Analyze sentiment with Gemini
-    const result = await analyzeSentiment(text, settings.apiKey);
+    // Analyze sentiment with Gemini (with context)
+    const result = await analyzeSentiment(text, settings.apiKey, context);
+    
+    console.log('Enhanced analysis result:', result);
     
     // Search for a matching video
     const video = await searchYouTubeVideo(result.search_query);
@@ -97,26 +103,34 @@ async function handleAnalyzeRequest(text, tabId) {
       throw new Error('Could not find a matching video');
     }
 
-    // Update current state
+    // Update current state with enhanced data
     currentState = {
       isPlaying: true,
       currentMood: result.mood_tag,
       currentQuery: result.search_query,
       currentVideoId: video.videoId,
-      currentVideoTitle: video.title
+      currentVideoTitle: video.title,
+      moodData: result,
+      context: context,
+      skipCount: 0
     };
 
     // Save state to storage
     await chrome.storage.local.set({ currentState });
 
-    // Send success response to content script
+    // Send success response to content script with enhanced data
     chrome.tabs.sendMessage(tabId, {
       type: 'PLAY_MUSIC',
       data: {
         mood: result.mood_tag,
         query: result.search_query,
         videoId: video.videoId,
-        videoTitle: video.title
+        videoTitle: video.title,
+        // Enhanced data for UI
+        energy: result.energy,
+        valence: result.valence,
+        tempo: result.tempo,
+        genres: result.genres
       }
     }).catch(() => {});
 
@@ -137,9 +151,10 @@ async function handleAnalyzeRequest(text, tabId) {
 /**
  * Handle manual mood selection
  */
-async function handleManualMood(mood, tabId) {
+async function handleManualMood(mood, tabId, context = {}) {
   try {
-    const moodData = getFallbackMusicQuery(mood);
+    // Get context-aware fallback query
+    const moodData = getFallbackMusicQuery(mood, context);
     const video = await searchYouTubeVideo(moodData.search_query);
     
     const videoId = video?.videoId || FALLBACK_VIDEOS[mood] || FALLBACK_VIDEOS.focus;
@@ -150,7 +165,10 @@ async function handleManualMood(mood, tabId) {
       currentMood: moodData.mood_tag,
       currentQuery: moodData.search_query,
       currentVideoId: videoId,
-      currentVideoTitle: videoTitle
+      currentVideoTitle: videoTitle,
+      moodData: moodData,
+      context: context,
+      skipCount: 0
     };
 
     await chrome.storage.local.set({ currentState });
@@ -161,7 +179,11 @@ async function handleManualMood(mood, tabId) {
         mood: moodData.mood_tag,
         query: moodData.search_query,
         videoId: videoId,
-        videoTitle: videoTitle
+        videoTitle: videoTitle,
+        energy: moodData.energy,
+        valence: moodData.valence,
+        tempo: moodData.tempo,
+        genres: moodData.genres
       }
     }).catch(() => {});
 
@@ -176,14 +198,23 @@ async function handleManualMood(mood, tabId) {
  * Handle skip/change song request
  */
 async function handleSkipSong(tabId) {
-  if (!currentState.currentQuery) {
+  if (!currentState.currentQuery && !currentState.moodData) {
     return { success: false, error: 'No current mood set' };
   }
 
   try {
-    // Search for a different video with modified query
-    const modifiedQuery = `${currentState.currentQuery} mix`;
-    const video = await searchYouTubeVideo(modifiedQuery);
+    // Increment skip count
+    currentState.skipCount = (currentState.skipCount || 0) + 1;
+    
+    // Generate alternative query based on skip count and mood data
+    const alternativeQuery = generateAlternativeQuery(
+      currentState.moodData || { search_query: currentState.currentQuery },
+      currentState.skipCount
+    );
+    
+    console.log(`Skip #${currentState.skipCount}, trying query: ${alternativeQuery}`);
+    
+    const video = await searchYouTubeVideo(alternativeQuery);
     
     if (video) {
       currentState.currentVideoId = video.videoId;
@@ -195,9 +226,13 @@ async function handleSkipSong(tabId) {
         type: 'PLAY_MUSIC',
         data: {
           mood: currentState.currentMood,
-          query: currentState.currentQuery,
+          query: alternativeQuery,
           videoId: video.videoId,
-          videoTitle: video.title
+          videoTitle: video.title,
+          energy: currentState.moodData?.energy,
+          valence: currentState.moodData?.valence,
+          tempo: currentState.moodData?.tempo,
+          genres: currentState.moodData?.genres
         }
       }).catch(() => {});
 
@@ -220,13 +255,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
       switch (message.type) {
         case 'ANALYZE_TEXT': {
-          const result = await handleAnalyzeRequest(message.text, tabId);
+          const result = await handleAnalyzeRequest(message.text, tabId, message.context || {});
           sendResponse(result);
           break;
         }
 
         case 'MANUAL_MOOD': {
-          const result = await handleManualMood(message.mood, tabId || message.tabId);
+          const result = await handleManualMood(message.mood, tabId || message.tabId, message.context || {});
           sendResponse(result);
           break;
         }
